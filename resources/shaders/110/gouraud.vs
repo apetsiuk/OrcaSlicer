@@ -6,6 +6,8 @@
 const vec3 LIGHT_TOP_DIR = vec3(-0.4574957, 0.4574957, 0.7624929);
 #define LIGHT_TOP_DIFFUSE    (0.8 * INTENSITY_CORRECTION)
 #define LIGHT_TOP_SPECULAR   (0.125 * INTENSITY_CORRECTION)
+
+
 #define LIGHT_TOP_SHININESS  20.0
 
 // normalized values for (1./1.43, 0.2/1.43, 1./1.43)
@@ -50,6 +52,7 @@ varying float color_clip_plane_dot;
 varying vec4 world_pos;
 varying float world_normal_z;
 varying vec3 eye_normal;
+varying vec3 fs_world_normal; // --- NEW: Add this line ---
 
 void main()
 {
@@ -71,8 +74,19 @@ void main()
     // Point in homogenous coordinates.
     world_pos = volume_world_matrix * vec4(v_position, 1.0);
 
+    // --- START MODIFICATION ---
+    // Calculate the full world normal
+    vec3 world_normal = normalize(slope.volume_world_normal_matrix * v_normal);
+
+    // Pass the full normal to the fragment shader
+    fs_world_normal = world_normal;
+
     // z component of normal vector in world coordinate used for slope shading
-    world_normal_z = slope.actived ? (normalize(slope.volume_world_normal_matrix * v_normal)).z : 0.0;
+    world_normal_z = slope.actived ? world_normal.z : 0.0;
+    // --- END MODIFICATION ---
+
+    // z component of normal vector in world coordinate used for slope shading
+    //world_normal_z = slope.actived ? (normalize(slope.volume_world_normal_matrix * v_normal)).z : 0.0;
 
     gl_Position = projection_matrix * position;
     // Fill in the scalars for fragment shader clipping. Fragments with any of these components lower than zero are discarded.

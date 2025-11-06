@@ -11,6 +11,7 @@
 //BBS
 #include "ShortestPath.hpp"
 #include "libslic3r/Feature/Interlocking/InterlockingGenerator.hpp"
+#include "AABBMesh.hpp"
 
 //! macro used to mark string used at localization, return same string
 #define L(s) Slic3r::I18N::translate(s)
@@ -842,6 +843,201 @@ void PrintObject::slice()
     this->set_done(posSlice);
 }
 
+void PrintObject::slice_nonplanar()
+{
+    if (! this->set_started(posSlice))
+        return;
+    //BBS: add flag to reload scene for shell rendering
+    m_print->set_status(5, L("Slicing mesh"), PrintBase::SlicingStatus::RELOAD_SCENE);
+    std::vector<coordf_t> layer_height_profile;
+    this->update_layer_height_profile(*this->model_object(), m_slicing_params, layer_height_profile);
+    m_print->throw_if_canceled();
+    m_typed_slices = false;
+    this->clear_layers();
+    m_layers = new_layers(this, generate_object_layers(m_slicing_params, layer_height_profile, m_config.precise_z_height.value));
+    this->slice_volumes();
+    m_print->throw_if_canceled();
+    int firstLayerReplacedBy = 0;
+
+#if 0
+    // Fix the model.
+    //FIXME is this the right place to do? It is done repeateadly at the UI and now here at the backend.
+    std::string warning = fix_slicing_errors(this, m_layers, [this](){ m_print->throw_if_canceled(); }, firstLayerReplacedBy);
+    m_print->throw_if_canceled();
+    //BBS: send warning message to slicing callback
+    // This warning is inaccurate, because the empty layers may have been replaced, or the model has supports.
+    //if (!warning.empty()) {
+    //    BOOST_LOG_TRIVIAL(info) << warning;
+    //    this->active_step_add_warning(PrintStateBase::WarningLevel::CRITICAL, warning, PrintStateBase::SlicingReplaceInitEmptyLayers);
+    //}
+#endif
+
+    // Detect and process holes that should be converted to polyholes
+    this->_transform_hole_to_polyholes();
+
+    // BBS: the actual first layer slices stored in layers are re-sorted by volume group and will be used to generate brim
+    groupingVolumesForBrim(this, m_layers, firstLayerReplacedBy);
+    /*
+    // Update bounding boxes, back up raw slices of complex models.
+    tbb::parallel_for(
+        tbb::blocked_range<size_t>(0, m_layers.size()),
+        [this](const tbb::blocked_range<size_t>& range) {
+            for (size_t layer_idx = range.begin(); layer_idx < range.end(); ++ layer_idx) {
+                m_print->throw_if_canceled();
+                Layer &layer = *m_layers[layer_idx];
+                layer.lslices_bboxes.clear();
+                layer.lslices_bboxes.reserve(layer.lslices.size());
+                for (const ExPolygon &expoly : layer.lslices)
+                    layer.lslices_bboxes.emplace_back(get_extents(expoly));
+                layer.backup_untyped_slices();
+            }
+        });
+     */
+    if (m_layers.empty())
+        throw Slic3r::SlicingError(L("No layers were detected. You might want to repair your STL file(s) or check their size or thickness and retry.\n"));
+    
+    this->lslices_were_updated();
+        if (m_layers.empty())
+            throw Slic3r::SlicingError("No layers were detected. You might want to repair your STL file(s) or check their size or thickness and retry.\n");
+    // BBS
+    this->set_done(posSlice);
+}
+
+void PrintObject::lslices_were_updated()
+{
+    // Update bounding boxes, back up raw slices of complex models.
+    tbb::parallel_for(
+        tbb::blocked_range<size_t>(0, m_layers.size()),
+        [this](const tbb::blocked_range<size_t>& range) {
+            for (size_t layer_idx = range.begin(); layer_idx < range.end(); ++ layer_idx) {
+                m_print->throw_if_canceled();
+                Layer &layer = *m_layers[layer_idx];
+                layer.lslices_bboxes.clear();
+                layer.lslices_bboxes.reserve(layer.lslices.size());
+                for (const ExPolygon &expoly : layer.lslices)
+                    layer.lslices_bboxes.emplace_back(get_extents(expoly));
+                layer.backup_untyped_slices();
+            }
+        });
+    // Update bounding boxes, back up raw slices of complex models.
+    tbb::parallel_for(
+        tbb::blocked_range<size_t>(0, m_layers.size()),
+        [this](const tbb::blocked_range<size_t> &range) {
+            for (size_t layer_idx = range.begin(); layer_idx < range.end(); ++ layer_idx) {
+                m_print->throw_if_canceled();
+                Layer &layer = *m_layers[layer_idx];
+                layer.lslices_ex.clear();
+                layer.lslices_ex.reserve(layer.lslices.size());
+                for (const ExPolygon &expoly : layer.lslices)
+                    layer.lslices_ex.push_back({ get_extents(expoly) });
+                layer.backup_untyped_slices();
+            }
+        });
+    // Interlink the lslices into a Z graph.
+    tbb::parallel_for(
+        tbb::blocked_range<size_t>(1, m_layers.size()),
+        [this](const tbb::blocked_range<size_t> &range) {
+            for (size_t layer_idx = range.begin(); layer_idx < range.end(); ++ layer_idx) {
+                m_print->throw_if_canceled();
+                Layer::build_up_down_graph(*m_layers[layer_idx - 1], *m_layers[layer_idx]);
+            }
+        });
+    if (m_layers.empty())
+        throw Slic3r::SlicingError(L("No layers were detected. You might want to repair your STL file(s) or check their size or thickness and retry.\n"));
+}
+
+
+
+void PrintObject::make_slices()
+{
+    const Print *print = this->print();
+    BOOST_LOG_TRIVIAL(debug) << "Slicing volumes - make_slices in parallel - begin";
+    {
+        
+        // Compensation value, scaled. Only applying the negative scaling here, as the positive scaling has already been applied during slicing.
+        const size_t num_extruders = print->config().nozzle_diameter.size();
+        //const auto   xy_compensation_scaled            = (num_extruders > 1 && this->is_mm_painted()) ? scaled<float>(0.f) : scaled<float>(std::min(m_config.xy_size_compensation.value, 0.));
+        const auto   xy_compensation_scaled = scaled<float>(0.f);
+        const float  elephant_foot_compensation_scaled = (m_config.raft_layers == 0) ?
+            // Only enable Elephant foot compensation if printing directly on the print bed.
+            float(scale_(m_config.elefant_foot_compensation.value)) :
+            0.f;
+        // Uncompensated slices for the first layer in case the Elephant foot compensation is applied.
+        ExPolygons  lslices_1st_layer;
+
+        tbb::parallel_for(
+            tbb::blocked_range<size_t>(0, m_layers.size()),
+            [this, xy_compensation_scaled, elephant_foot_compensation_scaled, &lslices_1st_layer](const tbb::blocked_range<size_t>& range) {
+                for (size_t layer_id = range.begin(); layer_id < range.end(); ++ layer_id) {
+                    m_print->throw_if_canceled();
+                    Layer *layer = m_layers[layer_id];
+                    // Apply size compensation and perform clipping of multi-part objects.
+                    float elfoot = (layer_id == 0) ? elephant_foot_compensation_scaled : 0.f;
+                    if (layer->m_regions.size() == 1) {
+                        // Optimized version for a single region layer.
+                        // Single region, growing or shrinking.
+                        LayerRegion *layerm = layer->m_regions.front();
+                        if (elfoot > 0) {
+                            // Apply the elephant foot compensation and store the 1st layer slices without the Elephant foot compensation applied.
+                            lslices_1st_layer = to_expolygons(std::move(layerm->slices.surfaces));
+                            float delta = xy_compensation_scaled;
+                            if (delta > elfoot) {
+                                delta -= elfoot;
+                                elfoot = 0.f;
+                            } else if (delta > 0)
+                                elfoot -= delta;
+                            layerm->slices.set(
+                                union_ex(
+                                    Slic3r::elephant_foot_compensation(
+                                        (delta == 0.f) ? lslices_1st_layer : offset_ex(lslices_1st_layer, delta),
+                                        layerm->flow(frExternalPerimeter), unscale<double>(elfoot))),
+                                stInternal);
+                            if (xy_compensation_scaled < 0.f)
+                                lslices_1st_layer = offset_ex(std::move(lslices_1st_layer), xy_compensation_scaled);
+                        } else if (xy_compensation_scaled < 0.f) {
+                            // Apply the XY compensation.
+                            layerm->slices.set(
+                                offset_ex(to_expolygons(std::move(layerm->slices.surfaces)), xy_compensation_scaled),
+                                stInternal);
+                        }
+                    } else {
+                        if (xy_compensation_scaled < 0.f || elfoot > 0.f) {
+                            // Apply the negative XY compensation.
+                            Polygons trimming;
+                            static const float eps = float(scale_(m_config.slice_closing_radius.value) * 1.5);
+                            if (elfoot > 0.f) {
+                                lslices_1st_layer = offset_ex(layer->merged(eps), std::min(xy_compensation_scaled, 0.f) - eps);
+                                trimming = to_polygons(Slic3r::elephant_foot_compensation(lslices_1st_layer,
+                                    layer->m_regions.front()->flow(frExternalPerimeter), unscale<double>(elfoot)));
+                            } else
+                                trimming = offset(layer->merged(float(SCALED_EPSILON)), xy_compensation_scaled - float(SCALED_EPSILON));
+                            for (size_t region_id = 0; region_id < layer->m_regions.size(); ++ region_id)
+                                layer->m_regions[region_id]->trim_surfaces(trimming);
+                        }
+                    }
+
+
+                    // Merge all regions' slices to get islands sorted topologically, chain them by a shortest path in separate index list
+                    layer->make_slices();
+                }
+            });
+        if (elephant_foot_compensation_scaled > 0.f && ! m_layers.empty()) {
+            // The Elephant foot has been compensated, therefore the 1st layer's lslices are shrank with the Elephant foot compensation value.
+            // Store the uncompensated value there.
+            //FIXME is this operation needed? MMU painting and brim now have to do work arounds to work with compensated layer, not with the uncompensated layer.
+            // There may be subtle issues removing this block such as support raft sticking too well with the first object layer.
+            Layer &layer = *m_layers.front();
+            assert(layer.id() == 0);
+            layer.lslices = std::move(lslices_1st_layer);
+            layer.lslice_indices_sorted_by_print_order = chain_expolygons(layer.lslices);
+        }
+    }
+
+    m_print->throw_if_canceled();
+    BOOST_LOG_TRIVIAL(debug) << "Slicing volumes - make_slices in parallel - end";
+}
+
+
 template<typename ThrowOnCancel>
 static inline void apply_mm_segmentation(PrintObject &print_object, ThrowOnCancel throw_on_cancel)
 {
@@ -1195,6 +1391,11 @@ void PrintObject::slice_volumes()
         BOOST_LOG_TRIVIAL(debug) << "Slicing volumes - MMU segmentation";
         apply_mm_segmentation(*this, [print]() { print->throw_if_canceled(); });
     }
+    
+    this->find_nonplanar_surfaces();
+    this->make_slices();
+    BOOST_LOG_TRIVIAL(debug) << "Slicing volumes - end";
+    
 
     // Is any ModelVolume fuzzy skin painted?
     if (this->model_object()->is_fuzzy_skin_painted()) {
@@ -1361,6 +1562,112 @@ void PrintObject::slice_volumes()
 
     m_print->throw_if_canceled();
     BOOST_LOG_TRIVIAL(debug) << "Slicing volumes - make_slices in parallel - end";
+}
+
+
+void
+PrintObject::find_nonplanar_surfaces()
+{
+    //skip if not active
+    if(!m_config.use_nonplanar_layers.value) {
+        BOOST_LOG_TRIVIAL(debug) << "Find nonplanar surfaces - disabled";
+        std::cout << "Find nonplanar surfaces - disabled!" << std::endl;
+        return;
+    }
+
+    BOOST_LOG_TRIVIAL(info) << "Find nonplanar surfaces - start";
+
+    //Itterate over all model volumes
+    const ModelVolumePtrs volumes = this->model_object()->volumes;
+    for (ModelVolumePtrs::const_iterator it = volumes.begin(); it != volumes.end(); ++ it) {
+        //only check non modifier volumes
+        if (! (*it)->is_modifier()) {
+            const TriangleMesh tmesh = (*it)->mesh();
+            AABBMesh mesh(tmesh, true);
+            std::map<int, NonplanarFacet> facets;
+
+            // store all meshes with slope <= nonplanar_layers_angle in map. Map is necessary to keep facet ID
+            // What faces are we checking?
+            std::cout << mesh.indices().size() << std::endl;
+            for (int face_id = 0; face_id < mesh.indices().size(); ++ face_id) {
+                auto &face = mesh.indices(face_id);
+                Vec3d normal = mesh.normal_by_face_id(face_id);
+
+                //TODO check if normals exist
+                if (normal.z() >= std::cos(m_config.nonplanar_layers_angle.value * 3.14159265/180.0)) {
+                    //copy facet
+                    NonplanarFacet new_facet;
+                    new_facet.normal.x = normal.x();
+                    new_facet.normal.y = normal.y();
+                    new_facet.normal.z = normal.z();
+
+                    Vec3i32 neighbor = mesh.face_neighbor_index()[face_id];
+                    its_triangle vertex = its_triangle_vertices(*mesh.get_triangle_mesh(), face_id);
+                    for (int j=0; j<=2 ;j++) {
+                        new_facet.vertex[j].x = vertex[j].x();
+                        new_facet.vertex[j].y = vertex[j].y();
+                        new_facet.vertex[j].z = vertex[j].z();
+                        new_facet.neighbor[j] = neighbor[j];
+                    }
+                    new_facet.calculate_stats();
+                    facets[face_id] = new_facet;
+                }
+            }
+
+            // create nonplanar surface from facets
+            NonplanarSurface nf = NonplanarSurface(facets);
+            
+            BOOST_LOG_TRIVIAL(trace) << "Find nonplanar surfaces - moving surfaces by z=" << -tmesh.stats().min.z();
+            nf.translate(0, 0, -tmesh.stats().min.z());
+
+            // group surfaces and attach all nonplanar surfaces to the PrintObject
+            m_nonplanar_surfaces = nf.group_surfaces();
+
+            // check if surfaces maintain maximum printing height, if not, erase it
+            for (NonplanarSurfaces::iterator it = m_nonplanar_surfaces.begin(); it!=m_nonplanar_surfaces.end();) {
+                if((*it).check_max_printing_height(m_config.nonplanar_layers_height.value)) {
+                    it = m_nonplanar_surfaces.erase(it);
+                }else {
+                    it++;
+                }
+            }
+
+            // check if surfaces area is not too small
+            for (NonplanarSurfaces::iterator it = m_nonplanar_surfaces.begin(); it!=m_nonplanar_surfaces.end();) {
+                if((*it).check_surface_area()) {
+                    it = m_nonplanar_surfaces.erase(it);
+                }else {
+                    it++;
+                }
+            }
+
+            // check if surfaces areas collide
+            for (NonplanarSurfaces::iterator it = m_nonplanar_surfaces.begin(); it!=m_nonplanar_surfaces.end();) {
+                if(check_nonplanar_collisions((*it))) {
+                    it = m_nonplanar_surfaces.erase(it);
+                } else {
+                    it++;
+                }
+            }
+
+            //nf.debug_output();
+
+#ifdef SLIC3R_DEBUG_SLICE_PROCESSING
+            for (size_t id = 0; id < m_nonplanar_surfaces.size(); ++ id) {
+                auto& surface = m_nonplanar_surfaces[id];
+                Surfaces surfaces;
+                surfaces_append(surfaces, surface.horizontal_projection(), SurfaceType::stTopNonplanar);
+                SurfaceCollection c(surfaces);
+                c.export_to_svg(debug_out_path("0_find_nonplanar_surface-%d.svg", id).c_str(), true);
+            }
+#endif
+
+            BOOST_LOG_TRIVIAL(info) << "Find nonplanar surfaces - found " << m_nonplanar_surfaces.size() << " in " << (*it)->name;
+            std::cout << "Find nonplanar surfaces - found " << m_nonplanar_surfaces.size() << " in " << (*it)->name << std::endl;
+        }
+    }
+
+    BOOST_LOG_TRIVIAL(info) << "Find nonplanar surfaces - end";
 }
 
 void PrintObject::apply_conical_overhang() {

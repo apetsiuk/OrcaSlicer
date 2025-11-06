@@ -834,6 +834,31 @@ void PrintConfigDef::init_fff_params()
     def->tooltip = L("Detour to avoid traveling across walls, which may cause blobs on the surface.");
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(false));
+    
+    def = this->add("use_nonplanar_layers", coBool);
+    def->label = L("Use nonplanar layers");
+    def->category = L("Nonplanar layers");
+    def->tooltip = L("Generate nonplanar layers on top of the object");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+    
+    def = this->add("nonplanar_layers_angle", coFloat);
+    def->label = L("Maximum nonplanar angle");
+    def->category = L("Nonplanar layers");
+    def->tooltip = L("The maximum angle the printer can print without collisions.");
+    def->sidetext = L("°");
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(10.0));
+    
+    def = this->add("nonplanar_layers_height", coFloat);
+    def->label = L("Maximum nonplanar height");
+    def->category = L("Nonplanar layers");
+    def->tooltip = L("The maximum height the printer can print without collisions.");
+    def->sidetext = L("mm");
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(4.0));
 
     def = this->add("max_travel_detour_distance", coFloatOrPercent);
     def->label = L("Avoid crossing walls - Max detour length");

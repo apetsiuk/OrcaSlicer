@@ -50,6 +50,8 @@ out float color_clip_plane_dot;
 out vec4 world_pos;
 out float world_normal_z;
 out vec3 eye_normal;
+//AP:
+out vec3 fs_world_normal;
 
 void main()
 {
@@ -72,7 +74,19 @@ void main()
     world_pos = volume_world_matrix * vec4(v_position, 1.0);
 
     // z component of normal vector in world coordinate used for slope shading
-    world_normal_z = slope.actived ? (normalize(slope.volume_world_normal_matrix * v_normal)).z : 0.0;
+    //world_normal_z = slope.actived ? (normalize(slope.volume_world_normal_matrix * v_normal)).z : 0.0;
+
+    //AP:
+    // --- START MODIFICATION ---
+    // Calculate the full world normal
+    vec3 world_normal = normalize(slope.volume_world_normal_matrix * v_normal);
+
+    // Pass the full normal to the fragment shader
+    fs_world_normal = world_normal;
+
+    // z component of normal vector in world coordinate used for slope shading
+    world_normal_z = slope.actived ? world_normal.z : 0.0;
+    // --- END MODIFICATION ---
 
     gl_Position = projection_matrix * position;
     // Fill in the scalars for fragment shader clipping. Fragments with any of these components lower than zero are discarded.

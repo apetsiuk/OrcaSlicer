@@ -304,6 +304,10 @@ set(lisbslic3r_sources
     MutablePriorityQueue.hpp
     NormalUtils.cpp
     NormalUtils.hpp
+    NonplanarFacet.cpp
+    NonplanarFacet.hpp
+    NonplanarSurface.cpp
+    NonplanarSurface.hpp
     NSVGUtils.cpp
     NSVGUtils.hpp
     ObjColorUtils.cpp

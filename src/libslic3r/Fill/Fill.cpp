@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <memory>
+#include "SVG.hpp"
 
 #include "../ClipperUtils.hpp"
 #include "../Geometry.hpp"

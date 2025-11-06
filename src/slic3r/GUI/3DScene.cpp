@@ -157,11 +157,20 @@ ColorRGBA GLVolume::SUPPORT_BLOCKER_COL  = {1.0f, 0.3f, 0.3f, 0.4f};
 
 ColorRGBA GLVolume::MODEL_HIDDEN_COL  = {0.f, 0.f, 0.f, 0.3f};
 
+/*
 std::array<ColorRGBA, 5> GLVolume::MODEL_COLOR = { {
     { 1.0f, 1.0f, 0.0f, 1.f },
     { 1.0f, 0.5f, 0.5f, 1.f },
     { 0.5f, 1.0f, 0.5f, 1.f },
     { 0.5f, 0.5f, 1.0f, 1.f },
+    { 1.0f, 1.0f, 0.0f, 1.f }
+} };
+*/
+std::array<ColorRGBA, 5> GLVolume::MODEL_COLOR = { {
+    { 0.0f, 1.0f, 0.0f, 1.f },
+    { 1.0f, 0.5f, 0.5f, 1.f },
+    { 1.0f, 1.0f, 0.5f, 1.f },
+    { 1.0f, 0.5f, 1.0f, 1.f },
     { 1.0f, 1.0f, 0.0f, 1.f }
 } };
 

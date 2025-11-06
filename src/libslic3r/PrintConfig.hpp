@@ -925,6 +925,12 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloat,               support_expansion))
     ((ConfigOptionFloat,               support_speed))
     ((ConfigOptionEnum<SupportMaterialStyle>, support_style))
+    // Non-planar
+    ((ConfigOptionBool,                 use_nonplanar_layers))
+    ((ConfigOptionFloat,                nonplanar_layers_angle))
+    ((ConfigOptionFloat,                nonplanar_layers_height))
+    // AP
+    ((ConfigOptionInt,                  top_solid_layers))
     // BBS
     //((ConfigOptionBool,                independent_support_layer_height))
     // Orca internal thick bridge
@@ -1103,6 +1109,9 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionInt, top_shell_layers))
     ((ConfigOptionFloat, top_shell_thickness))
     ((ConfigOptionFloat, top_surface_speed))
+
+    // AP
+    ((ConfigOptionInt,                  top_solid_layers))
     //BBS
     ((ConfigOptionBool,                 enable_overhang_speed))
     ((ConfigOptionFloatOrPercent,       overhang_1_4_speed))

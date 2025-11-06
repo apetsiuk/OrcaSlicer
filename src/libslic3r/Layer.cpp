@@ -50,7 +50,13 @@ void Layer::make_slices()
 
     this->lslices.clear();
     this->lslices.reserve(slices.size());
+<<<<<<< Updated upstream
 
+=======
+    
+    BOOST_LOG_TRIVIAL(trace) << "make_slices layer " << id() << " found " << slices.size() << " slices";
+    
+>>>>>>> Stashed changes
     // prepare ordering points
     Points ordering_points;
     ordering_points.reserve(slices.size());
@@ -63,7 +69,44 @@ void Layer::make_slices()
     // populate slices vector
     for (size_t i : order)
         this->lslices.emplace_back(std::move(slices[i]));
+    this->lslice_indices_sorted_by_print_order = chain_expolygons(this->lslices);
+    
 }
+
+void Layer::build_up_down_graph(Layer& below, Layer& above)
+{
+    // here
+    std::cout << "Hello, World!" << std::endl;
+}
+
+/*
+void Layer::build_up_down_graph(Layer& below, Layer& above)
+{
+    coord_t             paths_below_offset = 0;
+    ClipperLib_Z::Paths paths_below = expolygons_to_zpaths_shrunk(below.lslices, paths_below_offset);
+    coord_t             paths_above_offset = paths_below_offset + coord_t(below.lslices.size());
+    ClipperLib_Z::Paths paths_above = expolygons_to_zpaths_shrunk(above.lslices, paths_above_offset);
+#ifndef NDEBUG
+    coord_t             paths_end = paths_above_offset + coord_t(above.lslices.size());
+#endif // NDEBUG
+
+    ClipperLib_Z::Clipper  clipper;
+    ClipperLib_Z::PolyTree result;
+    ClipperZUtils::ClipperZIntersectionVisitor::Intersections intersections;
+    ClipperZUtils::ClipperZIntersectionVisitor visitor(intersections);
+    clipper.ZFillFunction(visitor.clipper_callback());
+    clipper.AddPaths(paths_below, ClipperLib_Z::ptSubject, true);
+    clipper.AddPaths(paths_above, ClipperLib_Z::ptClip, true);
+    clipper.Execute(ClipperLib_Z::ctIntersection, result, ClipperLib_Z::pftNonZero, ClipperLib_Z::pftNonZero);
+
+    connect_layer_slices(below, above, result, intersections, paths_below_offset, paths_above_offset
+#ifndef NDEBUG
+        , paths_end
+#endif // NDEBUG
+        );
+}
+*/
+
 
 static inline bool layer_needs_raw_backup(const Layer *layer)
 {
@@ -279,7 +322,8 @@ void Layer::export_region_slices_to_svg(const char *path) const
 void Layer::export_region_slices_to_svg_debug(const char *name) const
 {
     static size_t idx = 0;
-    this->export_region_slices_to_svg(debug_out_path("Layer-slices-%s-%d.svg", name, idx ++).c_str());
+    //this->export_region_slices_to_svg(debug_out_path("Layer-slices-%s-%d.svg", name, idx ++).c_str());
+    this->export_region_slices_to_svg(debug_out_path("Layer-%d-slices-%s-%d.svg", id(), name, idx ++).c_str());
 }
 
 void Layer::export_region_fill_surfaces_to_svg(const char *path) const
@@ -371,8 +415,60 @@ void Layer::simplify_support_loop(ExtrusionLoop* loop)
 void Layer::export_region_fill_surfaces_to_svg_debug(const char *name) const
 {
     static size_t idx = 0;
-    this->export_region_fill_surfaces_to_svg(debug_out_path("Layer-fill_surfaces-%s-%d.svg", name, idx ++).c_str());
+    //this->export_region_fill_surfaces_to_svg(debug_out_path("Layer-fill_surfaces-%s-%d.svg", name, idx ++).c_str());
+    this->export_region_fill_surfaces_to_svg(debug_out_path("Layer-%d-fill_surfaces-%s-%d.svg", id(), name, idx ++).c_str());
 }
+
+void Layer::export_lslices_polygons_to_svg(const char *path) const
+{
+    BoundingBox bbox;
+    for (const auto *region : m_regions)
+        for (const auto &surface : region->slices)
+            bbox.merge(get_extents(surface.expolygon));
+
+    SVG svg(path, bbox);
+    for (int i = 0; i< lslices.size(); i++)
+        svg.draw(lslices[i], "black", 1.0);
+    svg.Close();
+}
+
+// Export to "out/Layer-%name-%idx.svg" with an increasing index with every export.
+void Layer::export_lslices_polygons_to_svg_debug(const char *name) const
+{
+    static size_t idx = 0;
+    this->export_lslices_polygons_to_svg(debug_out_path("Layer-%d-lslice_polygons-%s-%d.svg", id(), name, idx ++).c_str());
+}
+
+void
+LayerRegion::remove_nonplanar_slices(SurfaceCollection topNonplanar) {
+    Surfaces layerm_slices_surfaces(slices.surfaces);
+
+    //save previously detected nonplanar surfaces
+    SurfaceCollection polyNonplanar;
+    for(Surface s : slices.surfaces) {
+        if (s.is_nonplanar()) {
+            polyNonplanar.surfaces.push_back(s);
+        }
+    }
+
+    // clear internal surfaces
+    slices.clear();
+
+    // append internal surfaces again without the found topNonplanar surfaces
+    slices.append(
+        diff_ex(
+            union_ex(layerm_slices_surfaces),
+            topNonplanar.surfaces,
+            ApplySafetyOffset::No),
+        stInternal
+    );
+}
+
+void
+LayerRegion::append_top_nonplanar_slices(SurfaceCollection topNonplanar) {
+    slices.append(std::move(topNonplanar));
+}
+
 
 coordf_t Layer::get_sparse_infill_max_void_area()
 {

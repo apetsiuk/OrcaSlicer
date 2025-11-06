@@ -4,6 +4,7 @@
 #include "ExPolygon.hpp"
 #include "Line.hpp"
 #include "Polygon.hpp"
+#include "SVG.hpp"
 #include <iostream>
 #include <utility>
 
@@ -648,6 +649,31 @@ Lines3 Polyline3::lines() const
         }
     }
     return lines;
+}
+
+
+bool export_to_svg(const char *path, const Polyline &polyline, BoundingBox bbox, const float stroke_width)
+{
+    SVG svg(path, bbox);
+    svg.draw(polyline, "black", stroke_width);
+    svg.Close();
+    return true;
+}
+
+bool export_to_svg(const char *path, const Polylines &polylines, BoundingBox bbox, const float stroke_width)
+{
+    SVG svg(path, bbox);
+    svg.draw(polylines, "black", stroke_width);
+    svg.Close();
+    return true;
+}
+
+bool export_to_svg(const char *path, const ThickPolylines &polylines, BoundingBox bbox, const float stroke_width)
+{
+    SVG svg(path, bbox);
+    svg.draw(polylines, "black", stroke_width);
+    svg.Close();
+    return true;
 }
 
 }

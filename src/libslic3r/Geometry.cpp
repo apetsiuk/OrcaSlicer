@@ -70,6 +70,23 @@ void simplify_polygons(const Polygons &polygons, double tolerance, Polygons* ret
     *retval = Slic3r::simplify_polygons(pp);
 }
 
+void simplify_polygons_nonplanar(const Polygons &polygons, double tolerance, Polygons* retval)
+{
+    Polygons simplified_raw;
+    for (const Polygon &source_polygon : polygons) {
+        Points simplified = MultiPoint::douglas_peucker(to_polyline(source_polygon).points, tolerance);
+        if (simplified.size() > 3) {
+            simplified.pop_back();
+            simplified_raw.push_back(Polygon{ std::move(simplified) });
+        }
+    }
+    *retval = Slic3r::simplify_polygons(simplified_raw);
+}
+
+
+
+
+
 double linint(double value, double oldmin, double oldmax, double newmin, double newmax)
 {
     return (value - oldmin) * (newmax - newmin) / (oldmax - oldmin) + newmin;
@@ -402,6 +419,28 @@ Vec3d extract_euler_angles(const Transform3d& transform)
     return extract_euler_angles(m);
 }
 
+
+Vec3d extract_rotation(const Eigen::Matrix<double, 3, 3, Eigen::DontAlign>& rotation_matrix)
+{
+    // The extracted "rotation" is a triplet of numbers such that Geometry::rotation_transform
+    // returns the original transform. Because of the chosen order of rotations, the triplet
+    // is not equivalent to Euler angles in the usual sense.
+    Vec3d angles = rotation_matrix.eulerAngles(2,1,0);
+    std::swap(angles(0), angles(2));
+    return angles;
+}
+
+Vec3d extract_rotation(const Transform3d& transform)
+{
+    // use only the non-translational part of the transform
+    Eigen::Matrix<double, 3, 3, Eigen::DontAlign> m = transform.matrix().block(0, 0, 3, 3);
+    // remove scale
+    m.col(0).normalize();
+    m.col(1).normalize();
+    m.col(2).normalize();
+    return extract_rotation(m);
+}
+
 void rotation_from_two_vectors(Vec3d from, Vec3d to, Vec3d& rotation_axis, double& phi, Matrix3d* rotation_matrix)
 {
     const Matrix3d m = Eigen::Quaterniond().setFromTwoVectors(from, to).toRotationMatrix();
@@ -472,6 +511,14 @@ Vec3d Transformation::get_rotation() const
 {
     return extract_euler_angles(extract_rotation_matrix(m_matrix));
 }
+
+Vec3d Transformation::get_rotation_nonplanar() const
+{
+    return extract_rotation(extract_rotation_matrix(m_matrix));
+}
+
+
+
 
 Transform3d Transformation::get_rotation_matrix() const
 {
@@ -671,6 +718,60 @@ Transformation Transformation::operator * (const Transformation& other) const
     return Transformation(get_matrix() * other.get_matrix());
 }
 
+
+
+TransformationSVD_nonplanar::TransformationSVD_nonplanar(const Transform3d& trafo)
+{
+    const auto &m0 = trafo.matrix().block<3, 3>(0, 0);
+    mirror = m0.determinant() < 0.0;
+
+    Matrix3d m;
+    if (mirror)
+        m = m0 * Eigen::DiagonalMatrix<double, 3, 3>(-1.0, 1.0, 1.0);
+    else
+        m = m0;
+    const Eigen::JacobiSVD<Matrix3d> svd(m, Eigen::ComputeFullU | Eigen::ComputeFullV);
+    u = svd.matrixU();
+    v = svd.matrixV();
+    s = svd.singularValues().asDiagonal();
+
+    scale = !s.isApprox(Matrix3d::Identity());
+    anisotropic_scale = ! is_approx(s(0, 0), s(1, 1)) || ! is_approx(s(1, 1), s(2, 2));
+    rotation = !v.isApprox(u);
+
+    if (anisotropic_scale) {
+        rotation_90_degrees = true;
+        for (int i = 0; i < 3; ++i) {
+            const Vec3d row = v.row(i).cwiseAbs();
+            const size_t num_zeros = is_approx(row[0], 0.) + is_approx(row[1], 0.) + is_approx(row[2], 0.);
+            const size_t num_ones  = is_approx(row[0], 1.) + is_approx(row[1], 1.) + is_approx(row[2], 1.);
+            if (num_zeros != 2 || num_ones != 1) {
+                rotation_90_degrees = false;
+                break;
+            }
+        }
+        // Detect skew by brute force: check if the axes are still orthogonal after transformation
+        const Matrix3d trafo_linear = trafo.linear();
+        const std::array<Vec3d, 3> axes = { Vec3d::UnitX(), Vec3d::UnitY(), Vec3d::UnitZ() };
+        std::array<Vec3d, 3> transformed_axes;
+        for (int i = 0; i < 3; ++i) {
+            transformed_axes[i] = trafo_linear * axes[i];
+        }
+        skew = std::abs(transformed_axes[0].dot(transformed_axes[1])) > EPSILON ||
+               std::abs(transformed_axes[1].dot(transformed_axes[2])) > EPSILON ||
+               std::abs(transformed_axes[2].dot(transformed_axes[0])) > EPSILON;
+
+        // This following old code does not work under all conditions. The v matrix can become non diagonal (see SPE-1492)
+//        skew = ! rotation_90_degrees;
+    } else
+        skew = false;
+}
+
+
+
+
+
+
 Transformation Transformation::volume_to_bed_transformation(const Transformation& instance_transformation, const BoundingBoxf3& bbox)
 {
     Transformation out;
@@ -774,6 +875,119 @@ double rotation_diff_z(const Vec3d &rot_xyz_from, const Vec3d &rot_xyz_to)
 #endif /* NDEBUG */
     return (axis.z() < 0) ? -angle : angle;
 }
+
+// This should only be called if it is known, that the two rotations only differ in rotation around the Z axis.
+double rotation_diff_z_nonplanar(const Transform3d &trafo_from, const Transform3d &trafo_to)
+{
+    auto  m  = trafo_to.linear() * trafo_from.linear().inverse();
+    assert(std::abs(m.determinant() - 1) < EPSILON);
+    Vec3d vx = m * Vec3d(1., 0., 0);
+    // Verify that the linear part of rotation from trafo_from to trafo_to rotates around Z and is unity.
+    assert(std::abs(std::hypot(vx.x(), vx.y()) - 1.) < 1e-5);
+    assert(std::abs(vx.z()) < 1e-5);
+    return atan2(vx.y(), vx.x());
+}
+
+
+bool trafos_differ_in_rotation_by_z_and_mirroring_by_xy_only(const Transform3d &t1, const Transform3d &t2)
+{
+    if (std::abs(t1.translation().z() - t2.translation().z()) > EPSILON)
+        // One of the object is higher than the other above the build plate (or below the build plate).
+        return false;
+    Matrix3d m1 = t1.matrix().block<3, 3>(0, 0);
+    Matrix3d m2 = t2.matrix().block<3, 3>(0, 0);
+    Matrix3d m = m2.inverse() * m1;
+    Vec3d    z = m.block<3, 1>(0, 2);
+    if (std::abs(z.x()) > EPSILON || std::abs(z.y()) > EPSILON || std::abs(z.z() - 1.) > EPSILON)
+        // Z direction or length changed.
+        return false;
+    // Z still points in the same direction and it has the same length.
+    Vec3d    x = m.block<3, 1>(0, 0);
+    Vec3d    y = m.block<3, 1>(0, 1);
+    if (std::abs(x.z()) > EPSILON || std::abs(y.z()) > EPSILON)
+        return false;
+    double   lx2 = x.squaredNorm();
+    double   ly2 = y.squaredNorm();
+    if (lx2 - 1. > EPSILON * EPSILON || ly2 - 1. > EPSILON * EPSILON)
+        return false;
+    // Verify whether the vectors x, y are still perpendicular.
+    double   d   = x.dot(y);
+    return std::abs(d * d) < EPSILON * lx2 * ly2;
+}
+
+bool
+Point_in_triangle(Vec2f pt, Vec2f v1, Vec2f v2, Vec2f v3)
+{
+    //Check if point is right of every edge
+    if (sign(pt, v1, v2) <= 0.0f) return false;
+    if (sign(pt, v2, v3) <= 0.0f) return false;
+    if (sign(pt, v3, v1) <= 0.0f) return false;
+
+    return true;
+}
+
+//https://graphics.stanford.edu/~mdfisher/Code/Engine/Plane.cpp.html
+coord_t
+Project_point_on_plane(Vec3f v1, Vec3f n, Point pt)
+{
+    //if no intersection leave point unchanged (should never happen)
+    if(n.z() == 0) {
+        return -1;
+    }
+    
+    //unscale point for calculations
+    float px = unscale<float>(pt.x());
+    float py = unscale<float>(pt.y());
+    float pz = 0;
+
+    //Calculate space plane
+    float d = -(v1.x() * n.x() + v1.y() * n.y() + v1.z() * n.z());
+
+    float u = -(n.x() * px + n.y() * py + n.z() * pz + d) / n.z();
+
+    //scale up again
+    return scale_(u);
+}
+
+// http://paulbourke.net/geometry/pointlineplane/index.html
+Vec3d*
+Line_intersection(Vec3d p1, Vec3d p2, Point p3, Point p4)
+{
+
+    float denom = ((p4.y() - p3.y())*(p2.x() - p1.x())) -
+                  ((p4.x() - p3.x())*(p2.y() - p1.y()));
+
+    float nume_a = ((p4.x() - p3.x())*(p1.y() - p3.y())) -
+                   ((p4.y() - p3.y())*(p1.x() - p3.x()));
+
+    float nume_b = ((p2.x() - p1.x())*(p1.y() - p3.y())) -
+                   ((p2.y() - p1.y())*(p1.x() - p3.x()));
+
+    if(denom == 0.0f)
+    {
+        return NULL;
+    }
+
+    float ua = nume_a / denom;
+    float ub = nume_b / denom;
+
+    if(ua >= 0.0f && ua <= 1.0f && ub >= 0.0f && ub <= 1.0f)
+    {
+        // Get the intersection point anc calculate z component
+        Vec3d* ret = new Vec3d();
+        ret->x() = p1.x() + ua*(p2.x() - p1.x());
+        ret->y() = p1.y() + ua*(p2.y() - p1.y());
+        ret->z() = p1.z() - ((sqrt((p1.x()-ret->x())*(p1.x()-ret->x()) + (p1.y()-ret->y())*(p1.y()-ret->y()))
+                  / sqrt((p1.x()-p2.x())*(p1.x()-p2.x()) + (p1.y()-p2.y())*(p1.y()-p2.y())))
+                  * (p1.z() - p2.z()));
+        return ret;
+    }
+
+    return NULL;
+}
+
+
+
 
 TransformationSVD::TransformationSVD(const Transform3d& trafo)
 {

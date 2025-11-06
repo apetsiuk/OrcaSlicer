@@ -222,8 +222,10 @@ public:
     void            set_origin(const coordf_t x, const coordf_t y) { this->set_origin(Vec2d(x, y)); }
     const Point&    last_pos() const { return m_last_pos; }
     Vec2d           point_to_gcode(const Point &point) const;
+    Vec3d           point3_to_gcode(const Point &point) const;
     Point           gcode_to_point(const Vec2d &point) const;
     Vec2d point_to_gcode_quantized(const Point& point) const;
+    Vec3d           point3_to_gcode_quantized(const Point &point) const;
     const FullPrintConfig &config() const { return m_config; }
     const Layer*    layer() const { return m_layer; }
     GCodeWriter&    writer() { return m_writer; }
@@ -245,6 +247,7 @@ public:
     void            apply_print_config(const PrintConfig &print_config);
 
     std::string     travel_to(const Point& point, ExtrusionRole role, std::string comment, double z = DBL_MAX);
+    bool            needs_zmove(const Polyline &travel);
     bool            needs_retraction(const Polyline& travel, ExtrusionRole role, LiftType& lift_type);
     std::string     retract(bool toolchange = false, bool is_last_retraction = false, LiftType lift_type = LiftType::NormalLift, ExtrusionRole role = erNone);
     std::string     unretract() { return m_writer.unlift() + m_writer.unretract(); }
@@ -257,6 +260,19 @@ public:
 
     // append full config to the given string
     static void append_full_config(const Print& print, std::string& str);
+    
+    // AP: heck with struct LayerToPrint
+    // Object and support extrusions of the same PrintObject at the same print_z.
+    // public, so that it could be accessed by free helper functions from GCode.cpp
+    struct ObjectLayerToPrint
+    {
+        ObjectLayerToPrint() : object_layer(nullptr), support_layer(nullptr) {}
+        const Layer*         object_layer;
+        const SupportLayer* support_layer;
+        const Layer*         layer()   const { return (object_layer != nullptr) ? object_layer : support_layer; }
+        const PrintObject*     object()  const { return (this->layer() != nullptr) ? this->layer()->object() : nullptr; }
+        coordf_t            print_z() const { return (object_layer != nullptr && support_layer != nullptr) ? 0.5 * (object_layer->print_z + support_layer->print_z) : this->layer()->print_z; }
+    };
 
     // Object and support extrusions of the same PrintObject at the same print_z.
     // public, so that it could be accessed by free helper functions from GCode.cpp
@@ -482,6 +498,25 @@ private:
 
     std::set<ObjectID>              m_objsWithBrim; // indicates the objs with brim
     std::set<ObjectID>              m_objSupportsWithBrim; // indicates the objs' supports with brim
+    
+    // This function will be called for each printing extruder, possibly twice: First for wiping extrusions, second for normal extrusions.
+        void process_layer_single_object(
+            // output
+            std::string              &gcode,
+            // Index of the extruder currently active.
+            const unsigned int        extruder_id,
+            // What object and instance is going to be printed.
+            const InstanceToPrint    &print_instance,
+            // and the object & support layer of the above.
+            const ObjectLayerToPrint &layer_to_print,
+            // Container for extruder overrides (when wiping into object or infill).
+            const LayerTools         &layer_tools,
+            // Is any extrusion possibly marked as wiping extrusion?
+            const bool                is_anything_overridden,
+            // Round 1 (wiping into object or infill) or round 2 (normal extrusions).
+            const bool                print_wipe_extrusions);
+    
+    
     // Cache for custom seam enforcers/blockers for each layer.
     SeamPlacer                          m_seam_placer;
 

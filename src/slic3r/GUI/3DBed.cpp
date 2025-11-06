@@ -182,10 +182,14 @@ const float Bed3D::Axes::DefaultTipRadius = 2.5f * Bed3D::Axes::DefaultStemRadiu
 const float Bed3D::Axes::DefaultTipLength = 5.0f;
 
 // ORCA make bed colors accessable for 2D bed
-ColorRGBA Bed3D::DEFAULT_MODEL_COLOR             = { 0.3255f, 0.337f, 0.337f, 1.0f };
+//ColorRGBA Bed3D::DEFAULT_MODEL_COLOR             = { 0.3255f, 0.337f, 0.337f, 1.0f };
+ColorRGBA Bed3D::DEFAULT_MODEL_COLOR             = { 0.99f, 0.99f, 0.1f, 1.0f };
 ColorRGBA Bed3D::DEFAULT_MODEL_COLOR_DARK        = { 0.255f, 0.255f, 0.283f, 1.0f };
-ColorRGBA Bed3D::DEFAULT_SOLID_GRID_COLOR        = { 0.9f, 0.9f, 0.9f, 1.0f };
+//ColorRGBA Bed3D::DEFAULT_MODEL_COLOR_DARK        = { 0.955f, 0.1f, 0.983f, 1.0f };
+//ColorRGBA Bed3D::DEFAULT_SOLID_GRID_COLOR        = { 0.9f, 0.9f, 0.9f, 1.0f };
+ColorRGBA Bed3D::DEFAULT_SOLID_GRID_COLOR        = { 0.9f, 0.9f, 0.2f, 0.4f };
 ColorRGBA Bed3D::DEFAULT_TRANSPARENT_GRID_COLOR  = { 0.9f, 0.9f, 0.9f, 0.6f };
+//ColorRGBA Bed3D::DEFAULT_TRANSPARENT_GRID_COLOR  = { 0.9f, 0.1f, 0.1f, 0.6f };
 
 ColorRGBA Bed3D::AXIS_X_COLOR = ColorRGBA::X();
 ColorRGBA Bed3D::AXIS_Y_COLOR = ColorRGBA::Y();

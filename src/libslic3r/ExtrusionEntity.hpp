@@ -9,6 +9,8 @@
 #include <string_view>
 #include <numeric>
 
+#include <boost/variant.hpp>
+
 namespace Slic3r {
 
 class ExPolygon;
@@ -157,6 +159,8 @@ public:
     float width;
     // Height of the extrusion, used for visualization purposes.
     float height;
+    /// distance to surface layer in nonplanar extrusions -1.0 if not part of nonplanar extrusion
+    float distance_to_top = -1.0;
 
     ExtrusionPath() : mm3_per_mm(-1), width(-1), height(-1), m_role(erNone), m_no_extrusion(false) {}
     ExtrusionPath(ExtrusionRole role) : mm3_per_mm(-1), width(-1), height(-1), m_role(role), m_no_extrusion(false) {}
@@ -273,6 +277,12 @@ private:
     //BBS
     bool m_no_extrusion = false;
 };
+
+class ExtrusionPath3 : public ExtrusionPath
+{
+    Polyline3 polyline;
+};
+
 
 class ExtrusionPathSloped : public ExtrusionPath
 {

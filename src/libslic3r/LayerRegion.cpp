@@ -465,6 +465,56 @@ Surfaces expand_merge_surfaces(
     return out;
 }
 
+static Surfaces expand_merge_surfaces_nonplanar(
+    Surfaces                                   &surfaces,
+    SurfaceType                                 surface_type,
+    ExPolygons                                  &shells,
+    const Algorithm::RegionExpansionParameters  &expansion_params_into_solid_infill,
+    ExPolygons                                  &sparse,
+    const Algorithm::RegionExpansionParameters  &expansion_params_into_sparse_infill,
+    const float                                 closing_radius,
+    const double                                bridge_angle = -1.)
+{
+    using namespace Slic3r::Algorithm;
+
+    double thickness;
+    ExPolygons src = fill_surfaces_extract_expolygons(surfaces, {surface_type}, thickness);
+    if (src.empty())
+        return {};
+
+    std::vector<RegionExpansion> expansions = propagate_waves(src, shells, expansion_params_into_solid_infill);
+    bool                         expanded_into_shells = !expansions.empty();
+    bool                         expanded_into_sparse = false;
+    {
+        std::vector<RegionExpansion> expansions2 = propagate_waves(src, sparse, expansion_params_into_sparse_infill);
+        if (! expansions2.empty()) {
+            expanded_into_sparse = true;
+            for (RegionExpansion &expansion : expansions2)
+                expansion.boundary_id += uint32_t(shells.size());
+            append(expansions, std::move(expansions2));
+        }
+    }
+
+    std::vector<ExPolygon> expanded = merge_expansions_into_expolygons(std::move(src), std::move(expansions));
+    //NOTE: The current regularization of the shells can create small unasigned regions in the object (E.G. benchy)
+    // without the following closing operation, those regions will stay unfilled and cause small holes in the expanded surface.
+    // look for narrow_ensure_vertical_wall_thickness_region_radius filter.
+    expanded = closing_ex(expanded, closing_radius);
+    // Trim the shells by the expanded expolygons.
+    if (expanded_into_shells)
+        shells = diff_ex(shells, expanded);
+    if (expanded_into_sparse)
+        sparse = diff_ex(sparse, expanded);
+
+    Surface templ{ surface_type, {} };
+    templ.bridge_angle = bridge_angle;
+    Surfaces out;
+    out.reserve(expanded.size());
+    for (auto &expoly : expanded)
+        out.emplace_back(templ, std::move(expoly));
+    return out;
+}
+
 void LayerRegion::process_external_surfaces(const Layer *lower_layer, const Polygons *lower_layer_covered)
 {
     using namespace Slic3r::Algorithm;
@@ -543,6 +593,14 @@ void LayerRegion::process_external_surfaces(const Layer *lower_layer, const Poly
 
     expansion_zones.at(0).parameters = RegionExpansionParameters::build(expansion_top, expansion_step, max_nr_expansion_steps);
     Surfaces tops = expand_merge_surfaces(this->fill_surfaces.surfaces, stTop, expansion_zones, closing_radius);
+    
+    // AP: expand_merge_surfaces should probably be rewritten
+    Surfaces    nonplanarTops = expand_merge_surfaces_nonplanar(fill_surfaces.surfaces, stTopNonplanar, shells,
+            RegionExpansionParameters::build(expansion_top, expansion_step, max_nr_expansion_steps),
+            sparse, expansion_params_into_sparse_infill, closing_radius);
+    Surfaces    nonplanarInternals = expand_merge_surfaces_nonplanar(fill_surfaces.surfaces, stInternalSolidNonplanar, shells,
+            RegionExpansionParameters::build(expansion_top, expansion_step, max_nr_expansion_steps),
+            sparse, expansion_params_into_sparse_infill, closing_radius);
 
     // turn too small internal regions into solid regions according to the user setting
     if (!this->layer()->object()->print()->config().spiral_mode && this->region().config().sparse_infill_density.value > 0) {
@@ -567,7 +625,8 @@ void LayerRegion::process_external_surfaces(const Layer *lower_layer, const Poly
     unsigned zones_expolygons_count = 0;
     for (const ExpansionZone& zone : expansion_zones)
         zones_expolygons_count += zone.expolygons.size();
-    reserve_more(this->fill_surfaces.surfaces, zones_expolygons_count + bridges.size() + bottoms.size() + tops.size());
+    //reserve_more(this->fill_surfaces.surfaces, zones_expolygons_count + bridges.size() + bottoms.size() + tops.size());
+    reserve_more(this->fill_surfaces.surfaces, shells.size() + sparse.size() + bridges.size() + bottoms.size() + tops.size() + nonplanarTops.size() + nonplanarInternals.size());
     {
         Surface solid_templ(stInternalSolid, {});
         solid_templ.thickness = layer_thickness;
@@ -581,6 +640,8 @@ void LayerRegion::process_external_surfaces(const Layer *lower_layer, const Poly
     this->fill_surfaces.append(std::move(bridges.surfaces));
     this->fill_surfaces.append(std::move(bottoms));
     this->fill_surfaces.append(std::move(tops));
+    this->fill_surfaces.append(std::move(nonplanarTops));
+    this->fill_surfaces.append(std::move(nonplanarInternals));
 
 #ifdef SLIC3R_DEBUG_SLICE_PROCESSING
     export_region_fill_surfaces_to_svg_debug("4_process_external_surfaces-final");
@@ -974,7 +1035,8 @@ void LayerRegion::export_region_slices_to_svg_debug(const char *name) const
 {
     static std::map<std::string, size_t> idx_map;
     size_t &idx = idx_map[name];
-    this->export_region_slices_to_svg(debug_out_path("LayerRegion-slices-%s-%d.svg", name, idx ++).c_str());
+    //this->export_region_slices_to_svg(debug_out_path("LayerRegion-slices-%s-%d.svg", name, idx ++).c_str());
+    this->export_region_slices_to_svg(debug_out_path("LayerRegion-%d-slices-%s-%d.svg", layer()->id(), name, idx ++).c_str());
 }
 
 void LayerRegion::export_region_fill_surfaces_to_svg(const char *path) const
@@ -1001,7 +1063,252 @@ void LayerRegion::export_region_fill_surfaces_to_svg_debug(const char *name) con
 {
     static std::map<std::string, size_t> idx_map;
     size_t &idx = idx_map[name];
-    this->export_region_fill_surfaces_to_svg(debug_out_path("LayerRegion-fill_surfaces-%s-%d.svg", name, idx ++).c_str());
+    //this->export_region_fill_surfaces_to_svg(debug_out_path("LayerRegion-fill_surfaces-%s-%d.svg", name, idx ++).c_str());
+    this->export_region_fill_surfaces_to_svg(debug_out_path("LayerRegion-%d-fill_surfaces-%s-%d.svg", layer()->id(), name, idx ++).c_str());
+}
+
+
+
+void
+LayerRegion::append_nonplanar_surface(NonplanarSurface& surface)
+{
+    for(auto & s : m_nonplanar_surfaces){
+        if (s == surface){
+            return;
+        }
+    }
+    m_nonplanar_surfaces.push_back(surface);
+}
+
+
+void
+LayerRegion::project_nonplanar_extrusion(ExtrusionEntityCollection *collection)
+{
+    for (auto& entity : collection->entities) {
+        if (ExtrusionLoop* loop = dynamic_cast<ExtrusionLoop*>(entity)) {
+            BOOST_LOG_TRIVIAL(trace) << "Projecting extrusion loop with " << loop->paths.size() << " paths";
+
+            for(auto& path : loop->paths) {
+                project_nonplanar_path(&path);
+                correct_z_on_path(&path);
+            }
+
+#ifdef SLIC3R_DEBUG_SLICE_PROCESSING
+            {
+                static int iRun = 0;
+                export_to_svg(debug_out_path("Layer-%d_project_extrusion_loop-%u-after.svg", layer()->id(), iRun ++).c_str(),
+                    loop->as_polyline(), get_extents(this->slices().surfaces), scale_(0.1f));
+            }
+#endif
+        } else if (ExtrusionMultiPath* multipath = dynamic_cast<ExtrusionMultiPath*>(entity)) {
+            BOOST_LOG_TRIVIAL(trace) << "Projecting extrusion multipath with " << multipath->paths.size() << " paths";
+
+            for (auto& path : multipath->paths) {
+                project_nonplanar_path(&path);
+                correct_z_on_path(&path);
+            }
+#ifdef SLIC3R_DEBUG_SLICE_PROCESSING
+            {
+                static int iRun = 0;
+                export_to_svg(debug_out_path("Layer-%d_project_extrusion_multipath-%u-after.svg", layer()->id(), iRun ++).c_str(),
+                    multipath->as_polyline(), get_extents(this->slices().surfaces), scale_(0.1f));
+            }
+#endif
+        } else if (ExtrusionPath* path = dynamic_cast<ExtrusionPath*>(entity)) {
+            BOOST_LOG_TRIVIAL(trace) << "Projecting 1 extrusion path";
+
+            project_nonplanar_path(path);
+            correct_z_on_path(path);
+#ifdef SLIC3R_DEBUG_SLICE_PROCESSING
+            {
+                static int iRun = 0;
+                export_to_svg(debug_out_path("Layer-%d_project_extrusion_path-%u-after.svg", layer()->id(), iRun ++).c_str(),
+                    path->as_polyline(), get_extents(this->slices().surfaces), scale_(0.1f));
+            }
+#endif
+        } else {
+            BOOST_LOG_TRIVIAL(trace) << "Unknown entity class " << typeid(entity).name();
+            assert(false);
+        }
+    }
+}
+
+
+void
+LayerRegion::project_nonplanar_surfaces()
+{
+    // skip if there are no nonplanar_surfaces on this LayerRegion
+    if (m_nonplanar_surfaces.size() == 0) {
+        return;
+    }
+
+    BOOST_LOG_TRIVIAL(trace) << "Projecting " << m_nonplanar_surfaces.size() << " nonplanar surfaces for region " <<
+        region().print_region_id() << " and layer " << layer()->id() << " (z = " << layer()->print_z << ")";
+
+    // for all perimeters do path projection
+    BOOST_LOG_TRIVIAL(trace) << "Projecting " << perimeters.size() << " nonplanar perimeters";
+    for (auto& col : perimeters.entities) {
+        ExtrusionEntityCollection* collection = dynamic_cast<ExtrusionEntityCollection*>(col);
+        this->project_nonplanar_extrusion(collection);
+    }
+
+    // and all fill paths do path projection
+    BOOST_LOG_TRIVIAL(trace) << "Projecting " << fills.size() << " nonplanar fills";
+    for (auto& col : fills.entities) {
+        ExtrusionEntityCollection* collection = dynamic_cast<ExtrusionEntityCollection*>(col);
+        this->project_nonplanar_extrusion(collection);
+    }
+}
+
+
+//Sorting functions for soring of paths
+bool
+greaterX(const Vec3d &a, const Vec3d &b)
+{
+   return (a.x() < b.x());
+}
+
+bool
+smallerX(const Vec3d &a, const Vec3d &b)
+{
+   return (a.x() > b.x());
+}
+
+bool
+greaterY(const Vec3d &a, const Vec3d &b)
+{
+   return (a.y() < b.y());
+}
+
+bool
+smallerY(const Vec3d &a, const Vec3d &b)
+{
+   return (a.y() > b.y());
+}
+
+void
+LayerRegion::project_nonplanar_path(ExtrusionPath *path)
+{
+    //First check all points and project them regarding the triangle mesh
+    for (Point& point : path->polyline.points) {
+        for (auto& surface : m_nonplanar_surfaces) {
+            float distance_to_top = surface.stats.max.z - this->layer()->print_z;
+            for(auto& facet : surface.mesh) {
+                // skip if point is outside of the bounding box of the triangle
+                if (unscale(point).x() < std::min({facet.second.vertex[0].x, facet.second.vertex[1].x, facet.second.vertex[2].x}) ||
+                    unscale(point).x() > std::max({facet.second.vertex[0].x, facet.second.vertex[1].x, facet.second.vertex[2].x}) ||
+                    unscale(point).y() < std::min({facet.second.vertex[0].y, facet.second.vertex[1].y, facet.second.vertex[2].y}) ||
+                    unscale(point).y() > std::max({facet.second.vertex[0].y, facet.second.vertex[1].y, facet.second.vertex[2].y}))
+                {
+                    continue;
+                }
+
+                //check if point is inside of Triangle
+                if (Slic3r::Geometry::Point_in_triangle(
+                    Vec2f(unscale(point).x(), unscale(point).y()),
+                    Vec2f(facet.second.vertex[0].x, facet.second.vertex[0].y),
+                    Vec2f(facet.second.vertex[1].x, facet.second.vertex[1].y),
+                    Vec2f(facet.second.vertex[2].x, facet.second.vertex[2].y))
+                    && (facet.second.normal.z != 0))
+                {
+                    coord_t z = Slic3r::Geometry::Project_point_on_plane(Vec3f(facet.second.vertex[0].x,facet.second.vertex[0].y,facet.second.vertex[0].z),
+                                                             Vec3f(facet.second.normal.x,facet.second.normal.y,facet.second.normal.z),
+                                                             point);
+
+                    //Shift down when on lower layer
+                    point.nonplanar_z = z - scale_(distance_to_top);
+                    //break;
+                }
+            }
+        }
+    }
+
+    // Then check all line intersections, cut line on intersection and project new point
+    std::vector<Vec3crd>::size_type size = path->polyline.points.size();
+    for (std::vector<Vec3crd>::size_type i = 0; i < size-1; ++i)
+    {
+        Pointf3s intersections;
+        // check against every facet if lines intersect
+        for (auto& surface : m_nonplanar_surfaces) {
+            float distance_to_top = surface.stats.max.z - this->layer()->print_z;
+            for(auto& facet : surface.mesh) {
+                for(int j= 0; j < 3; j++) {
+                    // TODO precheck for faster computation
+                    Vec3d p1 = Vec3d(scale_(facet.second.vertex[j].x), scale_(facet.second.vertex[j].y), scale_(facet.second.vertex[j].z));
+                    Vec3d p2 = Vec3d(scale_(facet.second.vertex[(j+1) % 3].x), scale_(facet.second.vertex[(j+1) % 3].y), scale_(facet.second.vertex[(j+1) % 3].z));
+                    Vec3d* p = Slic3r::Geometry::Line_intersection(p1, p2, path->polyline.points[i], path->polyline.points[i+1]);
+
+                    if (p) {
+                        // add distance to top for every added point
+                        p->z() = p->z() - scale_(distance_to_top);
+                        intersections.push_back(*p);
+                    }
+                }
+            }
+        }
+
+        // Stop if no intersections are found
+        if (intersections.size() == 0) continue;
+
+        // sort found intersectons if there are more than 1
+        if ( intersections.size() > 1 ){
+            if (abs(path->polyline.points[i+1].x() - path->polyline.points[i].x()) >= abs(path->polyline.points[i+1].y() - path->polyline.points[i].y()) ) {
+                // sort by X
+                if(path->polyline.points[i].x() < path->polyline.points[i+1].x()) {
+                    std::sort(intersections.begin(), intersections.end(), smallerX);
+                }else {
+                    std::sort(intersections.begin(), intersections.end(), greaterX);
+                }
+            } else {
+                // sort by Y
+                if(path->polyline.points[i].y() < path->polyline.points[i+1].y()) {
+                    std::sort(intersections.begin(), intersections.end(), smallerY);
+                }else {
+                    std::sort(intersections.begin(), intersections.end(), greaterY);
+                }
+            }
+        }
+
+        // remove duplicates
+        Pointf3s::iterator point = intersections.begin();
+        while (point != intersections.end()-1) {
+            bool delete_point = false;
+            Pointf3s::iterator point2 = point;
+            ++point2;
+            //compare with next point if they are the same, delete current point
+            if ((*point).x() == (*point2).x() && (*point).y() == (*point2).y()) {
+                    //remove duplicate point
+                    delete_point = true;
+                    point = intersections.erase(point);
+            }
+            //continue loop when no point is removed. Otherwise the new point is set while deleting the old one.
+            if (!delete_point) {
+                ++point;
+            }
+        }
+
+        //insert new points into array
+        for (Vec3d p : intersections)
+        {
+            Point *pt = new Point(p.x(), p.y());
+            pt->nonplanar_z = p.z();
+            path->polyline.points.insert(path->polyline.points.begin()+i+1, *pt);
+        }
+
+        //modifiy array boundary
+        i = i + intersections.size();
+        size = size + intersections.size();
+    }
+}
+
+void
+LayerRegion::correct_z_on_path(ExtrusionPath *path)
+{
+    for (Point& point : path->polyline.points) {
+        if(point.nonplanar_z == -1) {
+            point.nonplanar_z = scale_(this->layer()->print_z);
+        }
+    }
 }
 
 void LayerRegion::simplify_entity_collection(ExtrusionEntityCollection* entity_collection)

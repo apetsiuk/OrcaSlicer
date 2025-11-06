@@ -2316,6 +2316,11 @@ void TabPrint::build()
         optgroup->append_single_option_line("wipe_speed", "quality_settings_seam#wipe-speed");
         optgroup->append_single_option_line("wipe_on_loops","quality_settings_seam#wipe-on-loop-inward-movement");
         optgroup->append_single_option_line("wipe_before_external_loop","quality_settings_seam#wipe-before-external");
+    
+        optgroup = page->new_optgroup(L("Non-planar layers (experimental)"), L"non_planar_slicing");
+        optgroup->append_single_option_line("use_nonplanar_layers", "use-nonplanar-layers");
+        optgroup->append_single_option_line("nonplanar_layers_angle", "nonplanar-layers-angle");
+        optgroup->append_single_option_line("nonplanar_layers_height", "nonplanar-layers-height");
 
 
         optgroup = page->new_optgroup(L("Precision"), L"param_precision");

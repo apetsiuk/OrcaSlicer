@@ -377,6 +377,8 @@ bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* n
             osteps.emplace_back(posPerimeters);
             osteps.emplace_back(posEstimateCurledExtrusions);
             osteps.emplace_back(posInfill);
+            // AP
+            //osteps.emplace_back(posNonplanarProjection);
             osteps.emplace_back(posSupportMaterial);
 			osteps.emplace_back(posSimplifyPath);
             osteps.emplace_back(posSimplifyInfill);

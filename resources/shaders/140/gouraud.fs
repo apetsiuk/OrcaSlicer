@@ -58,6 +58,7 @@ in vec2 intensity;
 in vec4 world_pos;
 in float world_normal_z;
 in vec3 eye_normal;
+in vec3 fs_world_normal; // AP --- NEW: Add this line ---
 
 vec3 getBackfaceColor(vec3 fill) {
     float brightness = 0.2126 * fill.r + 0.7152 * fill.g + 0.0722 * fill.b;
@@ -132,25 +133,47 @@ void main()
         discard;
 
     vec4 color;
-	if (use_color_clip_plane) {
-		color.rgb = (color_clip_plane_dot < 0.0) ? uniform_color_clip_plane_1.rgb : uniform_color_clip_plane_2.rgb;
-		color.a = uniform_color.a;
-    }
-    else
-	    color = uniform_color;
 
-    if (slope.actived) {
-         if(world_pos.z<0.1&&world_pos.z>-0.1)
-         {
-                color.rgb = LightBlue;
-                color.a = 0.8;
-         }
-         else if( world_normal_z < slope.normal_z - EPSILON)
-         {
-                color.rgb = color.rgb * 0.5 + LightRed * 0.5;
-                color.a = 0.8;
-         }
-    }
+    // --- START MODIFICATION ---
+    //
+    // Use the world normal to set the color.
+    // Normals are in the -1.0 to 1.0 range. We map this to the
+    // 0.0 to 1.0 color range. Using abs() makes all
+    // directions (positive and negative) visible.
+    //
+    // X-normal will be Red
+    // Y-normal will be Green
+    // Z-normal will be Blue
+    //
+    vec3 normal_as_color = abs(fs_world_normal);
+
+    // Set the base color from the normal, but keep the alpha
+    // (transparency) from the original uniform_color.
+    color = vec4(normal_as_color, uniform_color.a);
+    //
+    // --- END MODIFICATION ---
+
+    ///*
+	//if (use_color_clip_plane) {
+	//	color.rgb = (color_clip_plane_dot < 0.0) ? uniform_color_clip_plane_1.rgb : uniform_color_clip_plane_2.rgb;
+	//	color.a = uniform_color.a;
+    //}
+    //else
+	//    color = uniform_color;
+
+    //if (slope.actived) {
+     //    if(world_pos.z<0.1&&world_pos.z>-0.1)
+     //    {
+     //           color.rgb = LightBlue;
+     //           color.a = 0.8;
+     //    }
+    //     else if( world_normal_z < slope.normal_z - EPSILON)
+    //     {
+    //            color.rgb = color.rgb * 0.5 + LightRed * 0.5;
+    //            color.a = 0.8;
+    //     }
+    //}
+    //*/
     // if the fragment is outside the print volume -> use darker color
 	vec3 pv_check_min = ZERO;
 	vec3 pv_check_max = ZERO;

@@ -95,9 +95,12 @@ public:
     bool first_intersection(const Line& line, Point* intersection) const;
     bool intersections(const Line &line, Points *intersections) const;
     void symmetric_y(const coord_t &y_axis);
+    static bool needs_zmove(const Points &pts);
     static Points _douglas_peucker(const Points &points, const double tolerance);
+    static Points douglas_peucker(const Points &points, const double tolerance);
     static Points visivalingam(const Points& pts, const double tolerance);
     static Points concave_hull_2d(const Points& pts, const double tolerence);
+    
     
     //Orca: Distancing function used by IOI wall ordering algorithm for arachne
     static double minimumDistanceBetweenLinesDefinedByPoints(const Points& A, const Points& B);

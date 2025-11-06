@@ -2231,6 +2231,7 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     // How many times will be change_layer() called?
     // change_layer() in turn increments the progress bar status.
     m_layer_count = 0;
+    // AP: sequential
     if (print.config().print_sequence == PrintSequence::ByObject) {
         // Add each of the object's layers separately.
         for (auto object : print.objects()) {
@@ -2252,6 +2253,7 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
         }
     } else {
         // Print all objects with the same print_z together.
+        // AP: non-sequential
         std::vector<coordf_t> zs;
         for (auto object : print.objects()) {
             zs.reserve(zs.size() + object->layers().size() + object->support_layers().size());
@@ -2450,11 +2452,15 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     std::vector<int>                                    first_non_support_filaments;
     std::vector<const PrintInstance*> 					print_object_instances_ordering;
     std::vector<const PrintInstance*>::const_iterator 	print_object_instance_sequential_active;
+<<<<<<< Updated upstream
     std::vector<const PrintInstance *>::const_iterator  first_has_extrude_print_object;
     //resize
     first_non_support_filaments.resize(print.config().nozzle_diameter.size(), -1);
     first_filaments.resize(print.config().nozzle_diameter.size(), -1);
 
+=======
+    // AP: sequential
+>>>>>>> Stashed changes
     if (print.config().print_sequence == PrintSequence::ByObject) {
         // Order object instances for sequential print.
         print_object_instances_ordering = sort_object_instances_by_model_order(print);
@@ -2926,6 +2932,7 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
         }
 
         // Do all objects for each layer.
+        // AP: sequential?
         if (print.config().print_sequence == PrintSequence::ByObject && !has_wipe_tower) {
             size_t finished_objects = 0;
             print_object_instance_sequential_active = first_has_extrude_print_object;
@@ -3013,6 +3020,7 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
                 prev_object = &object;
             }
         } else {
+            // AP: non-sequential
             // Sort layers by Z.
             // All extrusion moves with the same top layer height are extruded uninterrupted.
             std::vector<std::pair<coordf_t, std::vector<LayerToPrint>>> layers_to_print = collect_layers_to_print(print);
@@ -3063,9 +3071,13 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
                 }
                 print.throw_if_canceled();
             }
+<<<<<<< Updated upstream
 
             tool_ordering.cal_most_used_extruder(print.config());
 
+=======
+            // AP: non-sequential
+>>>>>>> Stashed changes
             // Process all layers of all objects (non-sequential mode) with a parallel pipeline:
             // Generate G-code, run the filters (vase mode, cooling buffer), run the G-code analyser
             // and export G-code into file.
@@ -4385,7 +4397,7 @@ LayerResult GCode::process_layer(
             }
         }
     }
-
+    // AP: NB! here
     // Group extrusions by an extruder, then by an object, an island and a region.
     std::map<unsigned int, std::vector<ObjectByExtruder>> by_extruder;
     bool is_anything_overridden = const_cast<LayerTools&>(layer_tools).wiping_extrusions().is_anything_overridden();
@@ -4832,7 +4844,8 @@ LayerResult GCode::process_layer(
                 gcode+="; PURGING FINISHED\n";
 
             for (InstanceToPrint &instance_to_print : instances_to_print) {
-                if (print.config().skirt_type == stPerObject && 
+                // should we put non-planar here?
+                if (print.config().skirt_type == stPerObject &&
                     !instance_to_print.print_object.object_skirt().empty() &&
                     print.config().print_sequence == PrintSequence::ByLayer
                     &&
@@ -5076,6 +5089,268 @@ LayerResult GCode::process_layer(
     result.cooling_buffer_flush = object_layer || raft_layer || last_layer;
     return result;
 }
+
+/*
+void GCode::process_layer_single_object(
+    // output
+    std::string              &gcode,
+    // Index of the extruder currently active.
+    const unsigned int        extruder_id,
+    // What object and instance is going to be printed.
+    const InstanceToPrint    &print_instance,
+    // and the object & support layer of the above.
+    const ObjectLayerToPrint &layer_to_print,
+    // Container for extruder overrides (when wiping into object or infill).
+    const LayerTools         &layer_tools,
+    // Is any extrusion possibly marked as wiping extrusion?
+    const bool                is_anything_overridden,
+    // Round 1 (wiping into object or infill) or round 2 (normal extrusions).
+    const bool                print_wipe_extrusions)
+{
+    bool     first     = true;
+    int      object_id = 0;
+    // Delay layer initialization as many layers may not print with all extruders.
+    auto init_layer_delayed = [this, &print_instance, &layer_to_print, &first, &object_id, &gcode]() {
+        if (first) {
+            first = false;
+            const PrintObject &print_object = print_instance.print_object;
+            const Print       &print        = *print_object.print();
+            m_config.apply(print_object.config(), true);
+            m_layer = layer_to_print.layer();
+            if (print.config().avoid_crossing_perimeters)
+                m_avoid_crossing_perimeters.init_layer(*m_layer);
+            // When starting a new object, use the external motion planner for the first travel move.
+            const Point &offset = print_object.instances()[print_instance.instance_id].shift;
+            std::pair<const PrintObject*, Point> this_object_copy(&print_object, offset);
+            if (m_last_obj_copy != this_object_copy)
+                m_avoid_crossing_perimeters.use_external_mp_once();
+            m_last_obj_copy = this_object_copy;
+            this->set_origin(unscale(offset));
+            if (this->config().gcode_label_objects) {
+                for (const PrintObject *po : print_object.print()->objects())
+                    if (po == &print_object)
+                        break;
+                    else
+                        ++ object_id;
+                gcode += std::string("; printing object ") + print_object.model_object()->name + " id:" + std::to_string(object_id) + " copy " + std::to_string(print_instance.instance_id) + "\n";
+            }
+        }
+    };
+
+    const PrintObject &print_object = print_instance.print_object;
+    const Print       &print        = *print_object.print();
+
+    m_extrusion_quality_estimator.set_current_object(&print_object);
+
+    if (! print_wipe_extrusions && layer_to_print.support_layer != nullptr)
+        if (const SupportLayer &support_layer = *layer_to_print.support_layer; ! support_layer.support_fills.entities.empty()) {
+            ExtrusionRole   role               = support_layer.support_fills.role();
+            bool            has_support        = role.is_mixed() || role.is_support_base();
+            bool            has_interface      = role.is_mixed() || role.is_support_interface();
+            // Extruder ID of the support base. -1 if "don't care".
+            unsigned int    support_extruder   = print_object.config().support_material_extruder.value - 1;
+            // Shall the support be printed with the active extruder, preferably with non-soluble, to avoid tool changes?
+            bool            support_dontcare   = support_extruder == std::numeric_limits<unsigned int>::max();
+            // Extruder ID of the support interface. -1 if "don't care".
+            unsigned int    interface_extruder = print_object.config().support_material_interface_extruder.value - 1;
+            // Shall the support interface be printed with the active extruder, preferably with non-soluble, to avoid tool changes?
+            bool            interface_dontcare = interface_extruder == std::numeric_limits<unsigned int>::max();
+            if (support_dontcare || interface_dontcare) {
+                // Some support will be printed with "don't care" material, preferably non-soluble.
+                // Is the current extruder assigned a soluble filament?
+                auto it_nonsoluble = std::find_if(layer_tools.extruders.begin(), layer_tools.extruders.end(),
+                    [&soluble = std::as_const(print.config().filament_soluble)](unsigned int extruder_id) { return ! soluble.get_at(extruder_id); });
+                // There should be a non-soluble extruder available.
+                assert(it_nonsoluble != layer_tools.extruders.end());
+                unsigned int dontcare_extruder = it_nonsoluble == layer_tools.extruders.end() ? layer_tools.extruders.front() : *it_nonsoluble;
+                if (support_dontcare)
+                    support_extruder = dontcare_extruder;
+                if (interface_dontcare)
+                    interface_extruder = dontcare_extruder;
+            }
+            bool extrude_support   = has_support && support_extruder == extruder_id;
+            bool extrude_interface = has_interface && interface_extruder == extruder_id;
+            if (extrude_support || extrude_interface) {
+                init_layer_delayed();
+                m_layer = layer_to_print.support_layer;
+                m_object_layer_over_raft = false;
+                gcode += this->extrude_support(
+                    // support_extrusion_role is ExtrusionRole::SupportMaterial, ExtrusionRole::SupportMaterialInterface or ExtrusionRole::Mixed for all extrusion paths.
+                    support_layer.support_fills.chained_path_from(m_last_pos, extrude_support ? (extrude_interface ? ExtrusionRole::Mixed : ExtrusionRole::SupportMaterial) : ExtrusionRole::SupportMaterialInterface));
+            }
+        }
+
+    m_layer = layer_to_print.layer();
+    // To control print speed of the 1st object layer printed over raft interface.
+    m_object_layer_over_raft = layer_to_print.object_layer && layer_to_print.object_layer->id() > 0 &&
+        print_object.slicing_parameters().raft_layers() == layer_to_print.object_layer->id();
+
+    // Check whether this ExtrusionEntityCollection should be printed now with extruder_id, given print_wipe_extrusions
+    // (wipe extrusions are printed before regular extrusions).
+    auto shall_print_this_extrusion_collection = [extruder_id, instance_id = print_instance.instance_id, &layer_tools, is_anything_overridden, print_wipe_extrusions](const ExtrusionEntityCollection *eec, const PrintRegion &region) -> bool {
+        assert(eec != nullptr);
+        if (eec->entities.empty())
+            // This shouldn't happen. FIXME why? but first_point() would fail.
+            return false;
+        // This extrusion is part of certain Region, which tells us which extruder should be used for it:
+        int correct_extruder_id = layer_tools.extruder(*eec, region);
+        if (! layer_tools.has_extruder(correct_extruder_id)) {
+            // this entity is not overridden, but its extruder is not in layer_tools - we'll print it
+            // by last extruder on this layer (could happen e.g. when a wiping object is taller than others - dontcare extruders are eradicated from layer_tools)
+            correct_extruder_id = layer_tools.extruders.back();
+        }
+        int extruder_override_id = is_anything_overridden ? layer_tools.wiping_extrusions().get_extruder_override(eec, instance_id) : -1;
+        return print_wipe_extrusions ?
+            extruder_override_id == int(extruder_id) :
+            extruder_override_id < 0 && int(extruder_id) == correct_extruder_id;
+    };
+
+    ExtrusionEntitiesPtr temp_fill_extrusions;
+    if (const Layer *layer = layer_to_print.object_layer; layer) {
+#ifdef SLIC3R_DEBUG_SLICE_PROCESSING
+        layer->export_lslices_polygons_to_svg_debug("process_gcode_layer");
+#endif
+        for (size_t idx : layer->lslice_indices_sorted_by_print_order) {
+            const LayerSlice &lslice = layer->lslices_ex[idx];
+            auto extrude_infill_range = [&](
+                const LayerRegion &layerm, const ExtrusionEntityCollection &fills,
+                LayerExtrusionRanges::const_iterator it_fill_ranges_begin, LayerExtrusionRanges::const_iterator it_fill_ranges_end, bool ironing) {
+                // PrintObjects own the PrintRegions, thus the pointer to PrintRegion would be unique to a PrintObject, they would not
+                // identify the content of PrintRegion accross the whole print uniquely. Translate to a Print specific PrintRegion.
+                const PrintRegion &region = print.get_print_region(layerm.region().print_region_id());
+                temp_fill_extrusions.clear();
+                for (auto it_fill_range = it_fill_ranges_begin; it_fill_range != it_fill_ranges_end; ++ it_fill_range) {
+                    assert(it_fill_range->region() == it_fill_ranges_begin->region());
+                    for (uint32_t fill_id : *it_fill_range) {
+                        auto *eec = static_cast<ExtrusionEntityCollection*>(fills.entities[fill_id]);
+                        assert(eec);
+                        if ((eec->role() == ExtrusionRole::Ironing) == ironing && shall_print_this_extrusion_collection(eec, region)) {
+#ifdef SLIC3R_DEBUG_SLICE_PROCESSING
+                                static int extrude_infill_range_run = 0;
+                                eec->export_to_svg(debug_out_path("Layer-%d_gcode-extrude_infill_range-shall-be-printed-%u.svg", layerm.layer()->id(), extrude_infill_range_run++).c_str());
+#endif
+                            if (eec->can_reverse())
+                                // Flatten the infill collection for better path planning.
+                                for (auto *ee : eec->entities) {
+                                    temp_fill_extrusions.emplace_back(ee);
+                                }
+                            else
+                                temp_fill_extrusions.emplace_back(eec);
+                        } else {
+#ifdef SLIC3R_DEBUG_SLICE_PROCESSING
+                                static int iRun = 0;
+                                eec->export_to_svg(debug_out_path("Layer-%d_gcode-extrude_infill_range-shall-not-be-printed-%u.svg", layerm.layer()->id(), iRun++).c_str());
+#endif
+                        }
+                    }
+                }
+                if (! temp_fill_extrusions.empty()) {
+                    init_layer_delayed();
+                    m_config.apply(region.config());
+                    //FIXME The source extrusions may be reversed, thus modifying the extrusions! Is it a problem? How about the initial G-code preview?
+                    // Will parallel access of initial G-code preview to these extrusions while reordering them at backend cause issues?
+                    chain_and_reorder_extrusion_entities(temp_fill_extrusions, &m_last_pos);
+                    const auto extrusion_name = ironing ? "ironing"sv : "infill"sv;
+                    for (const ExtrusionEntity *fill : temp_fill_extrusions) {
+                        if (auto *eec = dynamic_cast<const ExtrusionEntityCollection*>(fill); eec) {
+                            for (const ExtrusionEntity *ee : eec->chained_path_from(m_last_pos).entities) {
+#ifdef SLIC3R_DEBUG_SLICE_PROCESSING
+                                static int iRun = 0;
+                                eec->export_to_svg(debug_out_path("Layer-%d_gcode-extrude_infill_range-collection-%u.svg", layerm.layer()->id(), iRun++).c_str());
+#endif
+                                gcode += this->extrude_entity(*ee, extrusion_name);
+                            }
+                        } else {
+#ifdef SLIC3R_DEBUG_SLICE_PROCESSING
+                                static int iRun = 0;
+                                export_to_svg(debug_out_path("Layer-%d_gcode-extrude_infill_range-entity-%u.svg", layerm.layer()->id(), iRun++).c_str(),
+                                    fill->as_polyline(), get_extents(layerm.slices().surfaces), scale_(0.1f));
+#endif
+                            gcode += this->extrude_entity(*fill, extrusion_name);
+                        }
+                    }
+                }
+            };
+
+            //FIXME order islands?
+            // Sequential tool path ordering of multiple parts within the same object, aka. perimeter tracking (#5511)
+            BOOST_LOG_TRIVIAL(trace) << "Generating GCode for layer " << layer->id() << " - slice " << idx << " has " << lslice.islands.size() << " islands";
+            for (const LayerIsland &island : lslice.islands) {
+                auto process_perimeters = [&]() {
+                    const LayerRegion &layerm = *layer->get_region(island.perimeters.region());
+                    // PrintObjects own the PrintRegions, thus the pointer to PrintRegion would be unique to a PrintObject, they would not
+                    // identify the content of PrintRegion accross the whole print uniquely. Translate to a Print specific PrintRegion.
+                    const PrintRegion &region = print.get_print_region(layerm.region().print_region_id());
+                    bool first = true;
+                    for (uint32_t perimeter_id : island.perimeters) {
+                        const auto *eec = static_cast<const ExtrusionEntityCollection*>(layerm.perimeters().entities[perimeter_id]);
+                        assert(eec);
+                        if (shall_print_this_extrusion_collection(eec, region)) {
+#ifdef SLIC3R_DEBUG_SLICE_PROCESSING
+                                static int iRun = 0;
+                                eec->export_to_svg(debug_out_path("Layer-%d_gcode-process_perimeters-%u.svg", layerm.layer()->id(), iRun++).c_str());
+#endif
+                            // This may not apply to Arachne, but maybe the Arachne gap fill should disable reverse as well?
+                            // assert(! eec->can_reverse());
+                            if (first) {
+                                first = false;
+                                init_layer_delayed();
+                                m_config.apply(region.config());
+                            }
+                            for (const ExtrusionEntity *ee : *eec) {
+                                gcode += this->extrude_entity(*ee, comment_perimeter, -1.);
+                            }
+                        } else {
+#ifdef SLIC3R_DEBUG_SLICE_PROCESSING
+                                static int iRun = 0;
+                                eec->export_to_svg(debug_out_path("Layer-%d_gcode-process_perimeters-not-printed-%u.svg", layerm.layer()->id(), iRun++).c_str());
+#endif
+                        }
+                    }
+                };
+                auto process_infill = [&]() {
+                    for (auto it = island.fills.begin(); it != island.fills.end();) {
+                        // Gather range of fill ranges with the same region.
+                        auto it_end = it;
+                        for (++ it_end; it_end != island.fills.end() && it->region() == it_end->region(); ++ it_end) ;
+                        const LayerRegion &layerm = *layer->get_region(it->region());
+                        extrude_infill_range(layerm, layerm.fills(), it, it_end, false // normal extrusions, not ironing
+                        );
+                        it = it_end;
+                    }
+                };
+                BOOST_LOG_TRIVIAL(trace) << "Generating GCode for layer " << layer->id() << " island - " << island.fills.size() << " fills, " << island.perimeters.size() << " perimeters.";
+                if (print.config().infill_first) {
+                    process_infill();
+                    process_perimeters();
+                } else {
+                    process_perimeters();
+                    process_infill();
+                }
+            }
+            // ironing
+            //FIXME move ironing into the loop above over LayerIslands?
+            // First Ironing changes extrusion rate quickly, second single ironing may be done over multiple perimeter regions.
+            // Ironing in a second phase is safer, but it may be less efficient.
+            for (const LayerIsland &island : lslice.islands) {
+                for (auto it = island.fills.begin(); it != island.fills.end();) {
+                    // Gather range of fill ranges with the same region.
+                    auto it_end = it;
+                    for (++ it_end; it_end != island.fills.end() && it->region() == it_end->region(); ++ it_end) ;
+                    const LayerRegion &layerm = *layer->get_region(it->region());
+                    extrude_infill_range(layerm, layerm.fills(), it, it_end, true // ironing, not normal extrusions
+                     );
+                    it = it_end;
+                }
+            }
+        }
+    }
+    if (! first && this->config().gcode_label_objects)
+        gcode += std::string("; stop printing object ") + print_object.model_object()->name + " id:" + std::to_string(object_id) + " copy " + std::to_string(print_instance.instance_id) + "\n";
+}
+
+*/
+
 
 void GCode::apply_print_config(const PrintConfig &print_config)
 {
@@ -5630,6 +5905,7 @@ std::string GCode::extrude_perimeters(const Print &print, const std::vector<Obje
     std::string gcode;
     for (const ObjectByExtruder::Island::Region &region : by_region)
         if (! region.perimeters.empty()) {
+            //region.perimeters_overrides;
             m_config.apply(print.get_print_region(&region - &by_region.front()).config());
             // BBS: for first layer, we always print wall firstly to get better bed adhesive force
             // This behaviour is same with cura

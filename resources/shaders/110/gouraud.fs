@@ -59,6 +59,7 @@ varying vec2 intensity;
 varying vec4 world_pos;
 varying float world_normal_z;
 varying vec3 eye_normal;
+varying vec3 fs_world_normal; // --- NEW: Add this line ---
 
 vec3 getBackfaceColor(vec3 fill) {
     float brightness = 0.2126 * fill.r + 0.7152 * fill.g + 0.0722 * fill.b;
@@ -131,6 +132,137 @@ void main()
         discard;
 
     vec4 color;
+    // --- START MODIFICATION 1 ---
+    //
+    // 1. Define the range you want to "zoom in" on
+    //float range_min = 0.0;
+    //float range_max = 0.5;
+
+    // 2. Get the absolute normal vector (all 3 components)
+    //vec3 abs_normal = abs(fs_world_normal);
+
+    // 3. Remap all three components (X, Y, and Z) at the same time.
+    //    GLSL can perform this math on the entire vector at once.
+    //vec3 remapped_color = clamp((abs_normal - range_min) / (range_max - range_min), 0.0, 1.0);
+
+    // 4. Set the final color
+    //color = vec4(remapped_color, uniform_color.a);
+    //
+    // --- END MODIFICATION ---
+
+    // --- START MODIFICATION 2 ---
+    //
+    // 1. Define the color for flat surfaces (pointing up, Z=1.0)
+    //vec3 flat_color = vec3(0.0, 0.9, 0.9); // Blue (perfectly flat)
+    //vec3 steep_color = vec3(0.9, 0.0, 0.9); // Red (perfectly vertical)
+
+    // 2. Get the flatness value (1.0 = flat, 0.0 = steep)
+    //float t = abs(fs_world_normal.z);
+
+    // 3. (NEW) Apply a power function to make it more sensitive.
+    //    An exponent > 1.0 (like 4.0 or 8.0) makes the
+    //    gradient "hug" the steep_color. Only very flat
+    //    surfaces (t close to 1.0) will get the flat_color.
+    //    Increase '8.0' to make it even more sensitive.
+
+    //Instead of thinking of a "max," just think of a "practical range."
+    //For a sharp curve, try values like 16.0, 32.0, or 64.0.
+    //For a near-binary "on/off" switch (flat vs. not-flat), try 128.0 or 256.0.
+    //Going higher than that will almost certainly behave identically to 256.0 due to precision limits.
+    //float t_remapped = pow(t, 20.0);
+
+    // 4. Use mix() to blend between the two colors.
+    //    mix(A, B, t) = A*(1-t) + B*t
+    //    When t=1.0 (flat), it returns 100% flat_color.
+    //    When t=0.0 (steep), it returns 100% steep_color.
+    //vec3 remapped_color = mix(steep_color, flat_color, t_remapped);
+
+    // 5. Set the final color
+    //color = vec4(remapped_color, uniform_color.a);
+    //
+    // --- END MODIFICATION ---
+
+    // --- START MODIFICATION 3 ---
+    //
+    // 1. Define the colors
+    //vec3 flat_color = vec3(0.0, 0.9, 0.9); // Blue (perfectly flat)
+    //vec3 steep_color = vec3(0.7, 0.2, 0.7); // Red (perfectly vertical)
+
+    // 2. Get the flatness value (1.0 = flat, 0.0 = steep)
+    //float t = abs(fs_world_normal.z);
+
+    // 3. Apply power for sensitivity
+    //float t_remapped = pow(t, 32.0);
+
+    // 4. Calculate the base gradient color
+    //vec3 gradient_color = mix(steep_color, flat_color, t_remapped);
+
+    // 5. (NEW) Calculate and draw contour lines
+    // ---
+    //float num_lines = 5.0; // How many lines to draw between 0 and 90 degrees
+    //vec3 line_color = vec3(1.0, 1.0, 1.0); // Black
+
+    // Get the derivative of 't' (how fast it changes per pixel)
+    // This lets us draw a perfect, anti-aliased 1-pixel-thick line.
+    //float d = fwidth(t) * num_lines;
+
+    // 'fract(t * num_lines)' creates a repeating 0-1 sawtooth pattern.
+    // 'line_check' will be 1.0 in the middle and 0.0 on the lines.
+    //float line_check = smoothstep(0.0, d, fract(t * num_lines)) - 
+    //                   smoothstep(1.0 - d, 1.0, fract(t * num_lines));
+
+    // Invert it: now 'line_alpha' is 1.0 on the lines and 0.0 in the middle.
+    //float line_alpha = 1.0 - line_check;
+
+    // 6. (NEW) Blend the line color on top of the gradient color
+    // mix(A, B, alpha) = (A * (1-alpha)) + (B * alpha)
+    //vec3 final_color = mix(gradient_color, line_color, line_alpha);
+    // ---
+
+    // 7. Set the final color
+    //color = vec4(final_color, uniform_color.a);
+    //
+    // --- END MODIFICATION ---
+
+    // --- START MODIFICATION ---
+    //
+    // 1. Define the base gradient colors
+    vec3 flat_color = vec3(0.0, 0.9, 0.9); // Blue
+    vec3 steep_color = vec3(0.7, 0.2, 0.7); // Red
+
+    // 2. Define the custom color and its range
+    vec3 custom_color = vec3(1.0, 1.0, 1.0); // Bright Green
+    float range_min = 0.00; // The Z-normal value to start the band
+    float range_max = 0.05; // The Z-normal value to end the band
+
+    // 3. Get the flatness value (1.0 = flat, 0.0 = steep)
+    float t = abs(fs_world_normal.z);
+
+    // 4. Calculate the base gradient color (using the sensitive pow)
+    float t_remapped = pow(t, 164.0);
+    vec3 base_gradient_color = mix(steep_color, flat_color, t_remapped);
+
+    // 5. (NEW) Create a smooth, anti-aliased "mask" for the custom range.
+    //    fwidth(t) gets the rate of change, giving us a 1-pixel width.
+    float edge_width = fwidth(t);
+    //    smoothstep creates a soft "on" switch at range_min
+    float mask_on = smoothstep(range_min - edge_width, range_min, t);
+    //    smoothstep creates a soft "off" switch at range_max
+    float mask_off = smoothstep(range_max, range_max + edge_width, t);
+    //    The final mask is 1.0 inside the band and 0.0 outside.
+    float custom_mask = mask_on - mask_off;
+
+    // 6. (NEW) Blend the custom color on top of the base gradient.
+    //    mix(A, B, alpha) = (A * (1-alpha)) + (B * alpha)
+    vec3 final_color = mix(base_gradient_color, custom_color, custom_mask);
+    
+    // 7. Set the final color
+    color = vec4(final_color, uniform_color.a);
+    //
+    // --- END MODIFICATION ---
+
+
+    /*
 	if (use_color_clip_plane) {
 		color.rgb = (color_clip_plane_dot < 0.0) ? uniform_color_clip_plane_1.rgb : uniform_color_clip_plane_2.rgb;
 		color.a = uniform_color.a;
@@ -150,6 +282,7 @@ void main()
                 color.a = 0.8;
          }
     }
+    */
     // if the fragment is outside the print volume -> use darker color
 	vec3 pv_check_min = ZERO;
 	vec3 pv_check_max = ZERO;

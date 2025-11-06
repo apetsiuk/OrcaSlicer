@@ -322,6 +322,8 @@ template<typename T> void to_range_pi_pi(T &angle){
 
 void simplify_polygons(const Polygons &polygons, double tolerance, Polygons* retval);
 
+void simplify_polygons_nonplanar(const Polygons &polygons, double tolerance, Polygons* retval);
+
 double linint(double value, double oldmin, double oldmax, double newmin, double newmax);
 bool arrange(
     // input
@@ -389,10 +391,12 @@ Transform3d scale_transform(const Vec3d& scale);
 // Returns the euler angles extracted from the given rotation matrix
 // Warning -> The matrix should not contain any scale or shear !!!
 Vec3d extract_euler_angles(const Eigen::Matrix<double, 3, 3, Eigen::DontAlign>& rotation_matrix);
+Vec3d extract_rotation(const Eigen::Matrix<double, 3, 3, Eigen::DontAlign>& rotation_matrix);
 
 // Returns the euler angles extracted from the given affine transform
 // Warning -> The transform should not contain any shear !!!
 Vec3d extract_euler_angles(const Transform3d& transform);
+Vec3d extract_rotation(const Transform3d& transform);
 
 // get rotation from two vectors.
 // Default output is axis-angle. If rotation_matrix pointer is provided, also output rotation matrix
@@ -416,6 +420,7 @@ public:
     void set_offset(Axis axis, double offset) { m_matrix.translation()[axis] = offset; }
 
     Vec3d get_rotation() const;
+    Vec3d get_rotation_nonplanar() const;
     Vec3d get_rotation_by_quaternion() const;
     double get_rotation(Axis axis) const { return get_rotation()[axis]; }
 
@@ -515,6 +520,25 @@ struct TransformationSVD
     Eigen::DiagonalMatrix<double, 3, 3> mirror_matrix() const { return Eigen::DiagonalMatrix<double, 3, 3>(this->mirror ? -1. : 1., 1., 1.); }
 };
 
+struct TransformationSVD_nonplanar
+{
+    Matrix3d u{ Matrix3d::Identity() };
+    Matrix3d s{ Matrix3d::Identity() };
+    Matrix3d v{ Matrix3d::Identity() };
+
+    bool mirror{ false };
+    bool scale{ false };
+    bool anisotropic_scale{ false };
+    bool rotation{ false };
+    bool rotation_90_degrees{ false };
+    bool skew{ false };
+
+    explicit TransformationSVD_nonplanar(const Transformation& trafo) : TransformationSVD_nonplanar(trafo.get_matrix()) {}
+    explicit TransformationSVD_nonplanar(const Transform3d& trafo);
+
+    Eigen::DiagonalMatrix<double, 3, 3> mirror_matrix() const { return Eigen::DiagonalMatrix<double, 3, 3>(this->mirror ? -1. : 1., 1., 1.); }
+};
+
 // For parsing a transformation matrix from 3MF / AMF.
 extern Transform3d transform3d_from_string(const std::string& transform_str);
 
@@ -524,6 +548,7 @@ extern Eigen::Quaterniond rotation_xyz_diff(const Vec3d &rot_xyz_from, const Vec
 // Rotation by Z to align rot_xyz_from to rot_xyz_to.
 // This should only be called if it is known, that the two rotations only differ in rotation around the Z axis.
 extern double rotation_diff_z(const Vec3d &rot_xyz_from, const Vec3d &rot_xyz_to);
+extern double rotation_diff_z_nonplanar(const Vec3d &rot_xyz_from, const Vec3d &rot_xyz_to);
 
 // Is the angle close to a multiple of 90 degrees?
 inline bool is_rotation_ninety_degrees(double a)
@@ -539,6 +564,60 @@ inline bool is_rotation_ninety_degrees(const Vec3d &rotation)
 {
     return is_rotation_ninety_degrees(rotation.x()) && is_rotation_ninety_degrees(rotation.y()) && is_rotation_ninety_degrees(rotation.z());
 }
+
+
+// Returns true if one transformation may be converted into another transformation by
+// rotation around Z and by mirroring in X / Y only. Two objects sharing such transformation
+// may share support structures and they share Z height.
+bool trafos_differ_in_rotation_by_z_and_mirroring_by_xy_only(const Transform3d &t1, const Transform3d &t2);
+inline bool trafos_differ_in_rotation_by_z_and_mirroring_by_xy_only(const Transformation &t1, const Transformation &t2)
+    { return trafos_differ_in_rotation_by_z_and_mirroring_by_xy_only(t1.get_matrix(), t2.get_matrix()); }
+
+template <class Tout = double, class Tin>
+std::pair<Tout, Tout> dir_to_spheric(const Vec<3, Tin> &n, Tout norm = 1.)
+{
+    Tout z       = n.z();
+    Tout r       = norm;
+    Tout polar   = std::acos(z / r);
+    Tout azimuth = std::atan2(n(1), n(0));
+    return {polar, azimuth};
+}
+
+template <class T = double>
+Vec<3, T> spheric_to_dir(double polar, double azimuth)
+{
+    return {T(std::cos(azimuth) * std::sin(polar)),
+            T(std::sin(azimuth) * std::sin(polar)), T(std::cos(polar))};
+}
+
+template <class T = double, class Pair>
+Vec<3, T> spheric_to_dir(const Pair &v)
+{
+    double plr = std::get<0>(v), azm = std::get<1>(v);
+    return spheric_to_dir<T>(plr, azm);
+}
+
+inline float sign(Vec2f p1, Vec2f p2, Vec2f p3)
+{
+    return (p1.x() - p3.x()) * (p2.y() - p3.y()) - (p2.x() - p3.x()) * (p1.y() - p3.y());
+}
+
+bool Point_in_triangle(Vec2f pt, Vec2f v1, Vec2f v2, Vec2f v3);
+
+//https://graphics.stanford.edu/~mdfisher/Code/Engine/Plane.cpp.html
+coord_t Project_point_on_plane(Vec3f v1, Vec3f n, Point pt);
+
+// http://paulbourke.net/geometry/pointlineplane/index.html
+Vec3d *Line_intersection(Vec3d p1, Vec3d p2, Point p3, Point p4);
+
+inline float triangle_surface(Point p1, Point p2, Point p3) {
+    return 0.5 * ((p2.x()-p1.x()) * (p3.y()-p1.y()) - (p2.y()-p1.y()) * (p3.x()-p1.x()));
+}
+
+
+
+
+
 
 Transformation mat_around_a_point_rotate(const Transformation& innMat, const Vec3d &pt, const Vec3d &axis, float rotate_theta_radian);
 Transformation generate_transform(const Vec3d &x_dir, const Vec3d &y_dir, const Vec3d &z_dir, const Vec3d &origin);

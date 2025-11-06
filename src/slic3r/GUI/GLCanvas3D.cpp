@@ -2111,6 +2111,7 @@ void GLCanvas3D::render(bool only_init)
         show_grid = false;
 
     /* view3D render*/
+    // AP: objects rendering is here
     int hover_id = (m_hover_plate_idxs.size() > 0)?m_hover_plate_idxs.front():-1;
     if (m_canvas_type == ECanvasType::CanvasView3D) {
         //BBS: add outline logic
@@ -7682,7 +7683,7 @@ void GLCanvas3D::_render_objects(GLVolumeCollection::ERenderType type, bool with
         m_volumes.set_show_sinking_contours(false);
     else
         m_volumes.set_show_sinking_contours(!m_gizmos.is_hiding_instances());
-
+   // AP: calling shader here (replace with "flat"?)
     GLShaderProgram* shader = wxGetApp().get_shader("gouraud");
     ECanvasType canvas_type = this->m_canvas_type;
     bool                 partly_inside_enable = canvas_type == ECanvasType::CanvasAssembleView ? false : true;

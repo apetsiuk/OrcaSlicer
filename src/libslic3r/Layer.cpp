@@ -50,13 +50,10 @@ void Layer::make_slices()
 
     this->lslices.clear();
     this->lslices.reserve(slices.size());
-<<<<<<< Updated upstream
 
-=======
     
     BOOST_LOG_TRIVIAL(trace) << "make_slices layer " << id() << " found " << slices.size() << " slices";
     
->>>>>>> Stashed changes
     // prepare ordering points
     Points ordering_points;
     ordering_points.reserve(slices.size());

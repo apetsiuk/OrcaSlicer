@@ -42,3 +42,7 @@ deps_src/build/
 test.js
 /.cache/
 .clangd
+
+# Build directories
+xcode_build/
+deps/usr/

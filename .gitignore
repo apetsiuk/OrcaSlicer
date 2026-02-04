@@ -43,3 +43,6 @@ test.js
 /.cache/
 .clangd
 internal_docs/
+# Build directories
+xcode_build/
+deps/usr/
